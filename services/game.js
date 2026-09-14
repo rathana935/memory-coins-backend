@@ -74,12 +74,12 @@ function isValidDifficulty(difficulty) {
 
 }
 
-
 function generateCompletionToken() {
 
-    return crypto.randomBytes(32).toString("hex");
+    return crypto.randomUUID();
 
 }
+
 
 
 /*
@@ -145,12 +145,12 @@ export async function recoverLives(client, userId) {
 
     if (lives >= MAX_LIVES) {
 
-        if (user.last_life_lost_at !== null) {
+        if (user.last_life_at !== null) {
 
             await client.query(
                 `
                 UPDATE users
-                SET last_life_lost_at = NULL
+                SET last_life_at = NULL
                 WHERE id = $1
                 `,
                 [userId]
@@ -171,7 +171,7 @@ export async function recoverLives(client, userId) {
     nothing to recover yet.
     */
 
-    if (!user.last_life_lost_at) {
+    if (!user.last_life_at) {
 
         return {
             lives,
@@ -182,7 +182,7 @@ export async function recoverLives(client, userId) {
 
 
     const lostAt =
-        new Date(user.last_life_lost_at);
+        new Date(user.last_life_at);
 
 
     const now =
@@ -251,7 +251,7 @@ export async function recoverLives(client, userId) {
             UPDATE users
             SET
                 lives = $1,
-                last_life_lost_at = NULL
+                last_life_at = NULL
             WHERE id = $2
             `,
             [
@@ -287,7 +287,7 @@ export async function recoverLives(client, userId) {
         UPDATE users
         SET
             lives = $1,
-            last_life_lost_at = $2
+            last_life_at = $2
         WHERE id = $3
         `,
         [
@@ -389,17 +389,17 @@ export async function startGame(
                 UPDATE users
                 SET
                     lives = lives - 1,
-                    last_life_lost_at =
+                    last_life_at =
                         CASE
                             WHEN lives = $1
                             THEN NOW()
-                            ELSE last_life_lost_at
+                            ELSE last_life_at
                         END
                 WHERE id = $2
                 RETURNING
                     id,
                     lives,
-                    last_life_lost_at
+                    last_life_at
                 `,
                 [
                     MAX_LIVES,
@@ -542,10 +542,10 @@ export async function startGame(
                 Number(user.lives),
 
             nextLifeAt:
-                user.last_life_lost_at
+                user.last_life_at
                     ? new Date(
                         new Date(
-                            user.last_life_lost_at
+                            user.last_life_at
                         ).getTime() +
                         LIFE_COOLDOWN_MINUTES *
                         60 *
