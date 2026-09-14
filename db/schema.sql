@@ -7,69 +7,91 @@ BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-
 -- ============================================================
 -- USERS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    telegram_id BIGINT NOT NULL UNIQUE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    username VARCHAR(64),
-    first_name VARCHAR(255),
-    last_name VARCHAR(255),
-    photo_url TEXT,
+telegram_id BIGINT NOT NULL UNIQUE,
 
-    language_code VARCHAR(20),
+username VARCHAR(64),
 
-    is_premium BOOLEAN NOT NULL DEFAULT FALSE,
+first_name VARCHAR(255),
 
-    coins BIGINT NOT NULL DEFAULT 0
-        CHECK (coins >= 0),
+last_name VARCHAR(255),
 
-    today_coins BIGINT NOT NULL DEFAULT 0
-        CHECK (today_coins >= 0),
+photo_url TEXT,
 
-    games_played INTEGER NOT NULL DEFAULT 0
-        CHECK (games_played >= 0),
+language_code VARCHAR(20),
 
-    easy_games INTEGER NOT NULL DEFAULT 0
-        CHECK (easy_games >= 0),
+is_premium BOOLEAN NOT NULL
+    DEFAULT FALSE,
 
-    medium_games INTEGER NOT NULL DEFAULT 0
-        CHECK (medium_games >= 0),
+coins BIGINT NOT NULL
+    DEFAULT 0
+    CHECK (coins >= 0),
 
-    hard_games INTEGER NOT NULL DEFAULT 0
-        CHECK (hard_games >= 0),
+today_coins BIGINT NOT NULL
+    DEFAULT 0
+    CHECK (today_coins >= 0),
 
-    easy_level INTEGER NOT NULL DEFAULT 1
-        CHECK (easy_level BETWEEN 1 AND 100),
+games_played INTEGER NOT NULL
+    DEFAULT 0
+    CHECK (games_played >= 0),
 
-    medium_level INTEGER NOT NULL DEFAULT 1
-        CHECK (medium_level BETWEEN 1 AND 100),
+easy_games INTEGER NOT NULL
+    DEFAULT 0
+    CHECK (easy_games >= 0),
 
-    hard_level INTEGER NOT NULL DEFAULT 1
-        CHECK (hard_level BETWEEN 1 AND 100),
+medium_games INTEGER NOT NULL
+    DEFAULT 0
+    CHECK (medium_games >= 0),
 
-    lives INTEGER NOT NULL DEFAULT 5
-        CHECK (lives BETWEEN 0 AND 5),
+hard_games INTEGER NOT NULL
+    DEFAULT 0
+    CHECK (hard_games >= 0),
 
-    last_life_at TIMESTAMPTZ,
+easy_level INTEGER NOT NULL
+    DEFAULT 1
+    CHECK (easy_level BETWEEN 1 AND 100),
 
-    daily_streak INTEGER NOT NULL DEFAULT 0
-        CHECK (daily_streak >= 0),
+medium_level INTEGER NOT NULL
+    DEFAULT 1
+    CHECK (medium_level BETWEEN 1 AND 100),
 
-    last_daily_claim DATE,
+hard_level INTEGER NOT NULL
+    DEFAULT 1
+    CHECK (hard_level BETWEEN 1 AND 100),
 
-    is_blocked BOOLEAN NOT NULL DEFAULT FALSE,
+lives INTEGER NOT NULL
+    DEFAULT 5
+    CHECK (lives BETWEEN 0 AND 5),
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+last_life_at TIMESTAMPTZ,
+
+daily_streak INTEGER NOT NULL
+    DEFAULT 0
+    CHECK (daily_streak >= 0),
+
+last_daily_claim DATE,
+
+is_blocked BOOLEAN NOT NULL
+    DEFAULT FALSE,
+
+created_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+updated_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+last_seen_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
-
 
 CREATE INDEX IF NOT EXISTS idx_users_username
 ON users(username);
@@ -80,27 +102,33 @@ ON users(coins DESC);
 CREATE INDEX IF NOT EXISTS idx_users_last_seen
 ON users(last_seen_at);
 
-
 -- ============================================================
 -- AUTH SESSIONS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    token_hash CHAR(64) NOT NULL UNIQUE,
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    expires_at TIMESTAMPTZ NOT NULL,
+token_hash CHAR(64) NOT NULL UNIQUE,
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+expires_at TIMESTAMPTZ NOT NULL,
 
-    user_agent TEXT,
-    ip_address INET
+created_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+last_used_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+user_agent TEXT,
+
+ip_address INET
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
@@ -109,57 +137,63 @@ ON auth_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry
 ON auth_sessions(expires_at);
 
-
 -- ============================================================
 -- GAME SESSIONS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS game_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    difficulty VARCHAR(20) NOT NULL
-        CHECK (
-            difficulty IN (
-                'easy',
-                'medium',
-                'hard'
-            )
-        ),
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    level INTEGER NOT NULL
-        CHECK (level BETWEEN 1 AND 100),
+difficulty VARCHAR(20) NOT NULL
+    CHECK (
+        difficulty IN (
+            'easy',
+            'medium',
+            'hard'
+        )
+    ),
 
-    pairs INTEGER NOT NULL
-        CHECK (pairs > 0),
+level INTEGER NOT NULL
+    CHECK (level BETWEEN 1 AND 100),
 
-    reward_coins INTEGER NOT NULL
-        CHECK (reward_coins >= 0),
+pairs INTEGER NOT NULL
+    CHECK (pairs > 0),
 
-    status VARCHAR(20) NOT NULL DEFAULT 'started'
-        CHECK (
-            status IN (
-                'started',
-                'completed',
-                'abandoned',
-                'expired'
-            )
-        ),
+reward_coins INTEGER NOT NULL
+    CHECK (reward_coins >= 0),
 
-    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+status VARCHAR(20) NOT NULL
+    DEFAULT 'started'
+    CHECK (
+        status IN (
+            'started',
+            'completed',
+            'abandoned',
+            'expired'
+        )
+    ),
 
-    completed_at TIMESTAMPTZ,
+started_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
 
-    moves INTEGER,
+completed_at TIMESTAMPTZ,
 
-    duration_seconds INTEGER,
+moves INTEGER,
 
-    completion_token UUID NOT NULL DEFAULT gen_random_uuid(),
+duration_seconds INTEGER,
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+completion_token UUID NOT NULL
+    DEFAULT gen_random_uuid(),
+
+created_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_game_sessions_user
@@ -171,33 +205,36 @@ ON game_sessions(status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_game_completion_token
 ON game_sessions(completion_token);
 
-
 -- ============================================================
 -- GAME RESULTS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS game_results (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    game_session_id UUID NOT NULL UNIQUE
-        REFERENCES game_sessions(id)
-        ON DELETE CASCADE,
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    difficulty VARCHAR(20) NOT NULL,
+game_session_id UUID NOT NULL UNIQUE
+    REFERENCES game_sessions(id)
+    ON DELETE CASCADE,
 
-    level INTEGER NOT NULL,
+difficulty VARCHAR(20) NOT NULL,
 
-    reward_coins INTEGER NOT NULL,
+level INTEGER NOT NULL,
 
-    moves INTEGER NOT NULL,
+reward_coins INTEGER NOT NULL,
 
-    duration_seconds INTEGER NOT NULL,
+moves INTEGER NOT NULL,
 
-    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+duration_seconds INTEGER NOT NULL,
+
+completed_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_game_results_user
@@ -206,57 +243,70 @@ ON game_results(user_id);
 CREATE INDEX IF NOT EXISTS idx_game_results_completed
 ON game_results(completed_at);
 
-
 -- ============================================================
 -- DAILY BONUS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS daily_bonus_claims (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    claim_date DATE NOT NULL,
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    day_number INTEGER NOT NULL
-        CHECK (day_number BETWEEN 1 AND 7),
+claim_date DATE NOT NULL,
 
-    reward_coins INTEGER NOT NULL
-        CHECK (reward_coins > 0),
+day_number INTEGER NOT NULL
+    CHECK (day_number BETWEEN 1 AND 7),
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+reward_coins INTEGER NOT NULL
+    CHECK (reward_coins > 0),
 
-    UNIQUE(user_id, claim_date)
+created_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+UNIQUE(
+    user_id,
+    claim_date
+)
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_daily_bonus_user
 ON daily_bonus_claims(user_id);
-
 
 -- ============================================================
 -- LUCKY ROLLS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS lucky_rolls (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    roll_number INTEGER NOT NULL
-        CHECK (roll_number BETWEEN 1 AND 99999),
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    reward_coins INTEGER NOT NULL
-        CHECK (reward_coins >= 0),
+roll_number INTEGER NOT NULL
+    CHECK (
+        roll_number BETWEEN 1 AND 99999
+    ),
 
-    ad_required BOOLEAN NOT NULL DEFAULT TRUE,
+reward_coins INTEGER NOT NULL
+    CHECK (reward_coins >= 0),
 
-    ad_completed BOOLEAN NOT NULL DEFAULT FALSE,
+ad_required BOOLEAN NOT NULL
+    DEFAULT TRUE,
 
-    rolled_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ad_completed BOOLEAN NOT NULL
+    DEFAULT FALSE,
+
+rolled_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_lucky_rolls_user
@@ -265,40 +315,48 @@ ON lucky_rolls(user_id);
 CREATE INDEX IF NOT EXISTS idx_lucky_rolls_date
 ON lucky_rolls(rolled_at);
 
-
 -- ============================================================
 -- ADSGRAM AD REWARDS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS ad_rewards (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    provider VARCHAR(50) NOT NULL,
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    ad_type VARCHAR(50) NOT NULL,
+provider VARCHAR(50) NOT NULL,
 
-    external_reward_id VARCHAR(255),
+ad_type VARCHAR(50) NOT NULL,
 
-    reward_coins NUMERIC(20,4) NOT NULL
-        CHECK (reward_coins >= 0),
+external_reward_id VARCHAR(255),
 
-    status VARCHAR(20) NOT NULL DEFAULT 'pending'
-        CHECK (
-            status IN (
-                'pending',
-                'confirmed',
-                'rejected'
-            )
-        ),
+reward_coins NUMERIC(20,4) NOT NULL
+    CHECK (reward_coins >= 0),
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    confirmed_at TIMESTAMPTZ,
+status VARCHAR(20) NOT NULL
+    DEFAULT 'pending'
+    CHECK (
+        status IN (
+            'pending',
+            'confirmed',
+            'rejected'
+        )
+    ),
 
-    UNIQUE(provider, external_reward_id)
+created_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+confirmed_at TIMESTAMPTZ,
+
+UNIQUE(
+    provider,
+    external_reward_id
+)
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_ad_rewards_user
@@ -307,69 +365,79 @@ ON ad_rewards(user_id);
 CREATE INDEX IF NOT EXISTS idx_ad_rewards_provider
 ON ad_rewards(provider);
 
-
 -- ============================================================
 -- ACHIEVEMENTS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS achievements (
-    id VARCHAR(50) PRIMARY KEY,
 
-    title VARCHAR(255) NOT NULL,
+id VARCHAR(50) PRIMARY KEY,
 
-    description TEXT NOT NULL,
+title VARCHAR(255) NOT NULL,
 
-    icon VARCHAR(20),
+description TEXT NOT NULL,
 
-    requirement_type VARCHAR(50) NOT NULL,
+icon VARCHAR(20),
 
-    requirement_value INTEGER NOT NULL,
+requirement_type VARCHAR(50) NOT NULL,
 
-    reward_coins INTEGER NOT NULL DEFAULT 0
+requirement_value INTEGER NOT NULL,
+
+reward_coins INTEGER NOT NULL
+    DEFAULT 0
+
 );
-
 
 CREATE TABLE IF NOT EXISTS user_achievements (
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
 
-    achievement_id VARCHAR(50) NOT NULL
-        REFERENCES achievements(id)
-        ON DELETE CASCADE,
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    progress INTEGER NOT NULL DEFAULT 0,
+achievement_id VARCHAR(50) NOT NULL
+    REFERENCES achievements(id)
+    ON DELETE CASCADE,
 
-    unlocked_at TIMESTAMPTZ,
+progress INTEGER NOT NULL
+    DEFAULT 0,
 
-    PRIMARY KEY(user_id, achievement_id)
+unlocked_at TIMESTAMPTZ,
+
+PRIMARY KEY(
+    user_id,
+    achievement_id
+)
+
 );
-
 
 -- ============================================================
 -- COIN TRANSACTIONS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS coin_transactions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    type VARCHAR(50) NOT NULL,
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    amount BIGINT NOT NULL,
+type VARCHAR(50) NOT NULL,
 
-    balance_before BIGINT NOT NULL,
+amount BIGINT NOT NULL,
 
-    balance_after BIGINT NOT NULL,
+balance_before BIGINT NOT NULL,
 
-    reference_id UUID,
+balance_after BIGINT NOT NULL,
 
-    description TEXT,
+reference_id UUID,
 
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+description TEXT,
+
+created_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_transactions_user
@@ -381,48 +449,54 @@ ON coin_transactions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_type
 ON coin_transactions(type);
 
-
 -- ============================================================
 -- WITHDRAWALS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS withdrawals (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
+id UUID PRIMARY KEY
+    DEFAULT gen_random_uuid(),
 
-    provider VARCHAR(50) NOT NULL DEFAULT 'faucetpay',
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    amount_coins BIGINT NOT NULL
-        CHECK (amount_coins >= 2500),
+provider VARCHAR(50) NOT NULL
+    DEFAULT 'faucetpay',
 
-    amount_usd NUMERIC(20,8) NOT NULL,
+amount_coins BIGINT NOT NULL
+    CHECK (amount_coins >= 2500),
 
-    faucetpay_email TEXT NOT NULL,
+amount_usd NUMERIC(20,8) NOT NULL,
 
-    status VARCHAR(30) NOT NULL DEFAULT 'pending'
-        CHECK (
-            status IN (
-                'pending',
-                'processing',
-                'paid',
-                'failed',
-                'cancelled',
-                'refunded'
-            )
-        ),
+faucetpay_email TEXT NOT NULL,
 
-    provider_transaction_id TEXT,
+status VARCHAR(30) NOT NULL
+    DEFAULT 'pending'
+    CHECK (
+        status IN (
+            'pending',
+            'processing',
+            'paid',
+            'failed',
+            'cancelled',
+            'refunded'
+        )
+    ),
 
-    failure_reason TEXT,
+provider_transaction_id TEXT,
 
-    requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+failure_reason TEXT,
 
-    processed_at TIMESTAMPTZ,
+requested_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
 
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+processed_at TIMESTAMPTZ,
+
+updated_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user
@@ -434,50 +508,54 @@ ON withdrawals(status);
 CREATE INDEX IF NOT EXISTS idx_withdrawals_created
 ON withdrawals(requested_at DESC);
 
-
 -- ============================================================
--- LEADERBOARD SNAPSHOTS
+-- LEADERBOARD
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS leaderboard_scores (
-    user_id UUID NOT NULL
-        REFERENCES users(id)
-        ON DELETE CASCADE,
 
-    period_type VARCHAR(20) NOT NULL
-        CHECK (
-            period_type IN (
-                'weekly',
-                'all_time'
-            )
-        ),
+user_id UUID NOT NULL
+    REFERENCES users(id)
+    ON DELETE CASCADE,
 
-    period_start DATE,
+period_type VARCHAR(20) NOT NULL
+    CHECK (
+        period_type IN (
+            'weekly',
+            'all_time'
+        )
+    ),
 
-    coins BIGINT NOT NULL DEFAULT 0,
+period_start DATE,
 
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+coins BIGINT NOT NULL
+    DEFAULT 0,
 
-    PRIMARY KEY(
-        user_id,
-        period_type,
-        period_start
-    )
+updated_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW(),
+
+PRIMARY KEY(
+    user_id,
+    period_type,
+    period_start
+)
+
 );
 
-
 -- ============================================================
--- SYSTEM CONFIGURATION
+-- APP SETTINGS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS app_settings (
-    key VARCHAR(100) PRIMARY KEY,
 
-    value JSONB NOT NULL,
+key VARCHAR(100) PRIMARY KEY,
 
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+value JSONB NOT NULL,
+
+updated_at TIMESTAMPTZ NOT NULL
+    DEFAULT NOW()
+
 );
-
 
 -- ============================================================
 -- DEFAULT ACHIEVEMENTS
@@ -485,146 +563,194 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 INSERT INTO achievements
 (
-    id,
-    title,
-    description,
-    icon,
-    requirement_type,
-    requirement_value,
-    reward_coins
+id,
+title,
+description,
+icon,
+requirement_type,
+requirement_value,
+reward_coins
 )
+
 VALUES
 
 (
-    'first',
-    'First Game',
-    'Complete your first game.',
-    '🎮',
-    'games_played',
-    1,
-    0
+'first',
+'First Game',
+'Complete your first game.',
+'🎮',
+'games_played',
+1,
+0
 ),
 
 (
-    'five',
-    '5 Games',
-    'Complete 5 games.',
-    '🔥',
-    'games_played',
-    5,
-    0
+'five',
+'5 Games',
+'Complete 5 games.',
+'🔥',
+'games_played',
+5,
+0
 ),
 
 (
-    'fast',
-    'Memory Master',
-    'Complete a game under 30 seconds.',
-    '⚡',
-    'fast_game',
-    30,
-    0
+'fast',
+'Memory Master',
+'Complete a game under 30 seconds.',
+'⚡',
+'fast_game',
+30,
+0
 ),
 
 (
-    'coins',
-    'Coin Collector',
-    'Collect 10,000 coins.',
-    '💰',
-    'coins',
-    10000,
-    0
+'coins',
+'Coin Collector',
+'Collect 10,000 coins.',
+'💰',
+'coins',
+10000,
+0
 )
 
-ON CONFLICT (id) DO NOTHING;
-
+ON CONFLICT (id)
+DO NOTHING;
 
 -- ============================================================
--- DEFAULT SETTINGS
+-- DEFAULT ECONOMY SETTINGS
 -- ============================================================
 
-INSERT INTO app_settings(key, value)
+INSERT INTO app_settings
+(
+key,
+value
+)
+
 VALUES
 
 (
-    'economy',
-    '{
-        "coins_per_usd": 10000,
-        "minimum_withdrawal": 2500,
-        "daily_bonus": 100
-    }'::jsonb
+'economy',
+
+'{
+    "coins_per_usd": 10000,
+    "minimum_withdrawal": 2500,
+    "daily_bonus": 100
+}'::jsonb
+
 ),
-
-(
-    'levels',
-    '{
-        "easy": {
-            "pairs": 4,
-            "cards": 8,
-            "reward": 10,
-            "max_levels": 100
-        },
-        "medium": {
-            "pairs": 6,
-            "cards": 12,
-            "reward": 12,
-            "max_levels": 100
-        },
-        "hard": {
-            "pairs": 8,
-            "cards": 16,
-            "reward": 15,
-            "max_levels": 100
-        }
-    }'::jsonb
-),
-
-(
-    'lucky_roll',
-    '{
-        "cooldown_seconds": 300,
-        "minimum": 1,
-        "maximum": 99999,
-        "rewards": {
-            "default": 5,
-            "90000": 8,
-            "95000": 12,
-            "99500": 18,
-            "99997": 82,
-            "99999": 10000
-        }
-    }'::jsonb
-)
-
-ON CONFLICT (key) DO NOTHING;
-
 
 -- ============================================================
--- UPDATED_AT TRIGGER
+-- GAME LEVEL SETTINGS
+-- ============================================================
+
+(
+'levels',
+
+'{
+    "easy": {
+        "pairs": 4,
+        "cards": 8,
+        "reward": 10,
+        "max_levels": 100
+    },
+
+    "medium": {
+        "pairs": 6,
+        "cards": 12,
+        "reward": 12,
+        "max_levels": 100
+    },
+
+    "hard": {
+        "pairs": 8,
+        "cards": 16,
+        "reward": 15,
+        "max_levels": 100
+    }
+}'::jsonb
+
+),
+
+-- ============================================================
+-- LUCKY ROLL SETTINGS
+-- ============================================================
+
+(
+'lucky_roll',
+
+'{
+    "cooldown_seconds": 300,
+    "minimum": 1,
+    "maximum": 99999,
+
+    "rewards": {
+        "default": 5,
+        "90000": 8,
+        "95000": 12,
+        "99500": 18,
+        "99997": 82,
+        "99999": 10000
+    }
+}'::jsonb
+
+)
+
+ON CONFLICT (key)
+DO NOTHING;
+
+-- ============================================================
+-- UPDATED_AT FUNCTION
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
+
 RETURNS TRIGGER AS $$
+
 BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
+
+NEW.updated_at = NOW();
+
+RETURN NEW;
+
 END;
+
 $$ LANGUAGE plpgsql;
 
+-- ============================================================
+-- USERS UPDATED_AT TRIGGER
+-- ============================================================
 
-DROP TRIGGER IF EXISTS users_updated_at ON users;
+DROP TRIGGER IF EXISTS users_updated_at
+ON users;
 
 CREATE TRIGGER users_updated_at
+
 BEFORE UPDATE ON users
+
 FOR EACH ROW
-EXECUTE FUNCTION update_updated_at_column();
 
+EXECUTE FUNCTION
+update_updated_at_column();
 
-DROP TRIGGER IF EXISTS withdrawals_updated_at ON withdrawals;
+-- ============================================================
+-- WITHDRAWALS UPDATED_AT TRIGGER
+-- ============================================================
+
+DROP TRIGGER IF EXISTS withdrawals_updated_at
+ON withdrawals;
 
 CREATE TRIGGER withdrawals_updated_at
-BEFORE UPDATE ON withdrawals
-FOR EACH ROW
-EXECUTE FUNCTION update_updated_at_column();
 
+BEFORE UPDATE ON withdrawals
+
+FOR EACH ROW
+
+EXECUTE FUNCTION
+update_updated_at_column();
+
+-- ============================================================
+-- FINISH
+-- ============================================================
 
 COMMIT;
