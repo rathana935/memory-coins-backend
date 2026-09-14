@@ -9,211 +9,413 @@ import pool from "./db/pool.js";
 
 import authRoutes from "./routes/auth.js";
 import gameRoutes from "./routes/game.js";
+import rewardsRoutes from "./routes/rewards.js";
 
 import { requireAuth } from "./middleware/auth.js";
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT =
+Number(
+process.env.PORT || 3000
+);
 
-const FRONTEND_URL = String(
-    process.env.FRONTEND_URL || ""
+const FRONTEND_URL =
+String(
+process.env.FRONTEND_URL || ""
 ).trim();
 
 /*
-============================================================
+
 BASIC SETTINGS
-============================================================
+
 */
 
-app.set("trust proxy", 1);
+app.set(
+"trust proxy",
+1
+);
 
 /*
-============================================================
+
 CORS
-============================================================
+
 */
 
-const allowedOrigins = new Set([
-    "https://rathana935.github.io"
+const allowedOrigins =
+new Set([
+"https://rathana935.github.io"
 ]);
 
 if (FRONTEND_URL) {
-    allowedOrigins.add(
-        FRONTEND_URL.replace(/\/$/, "")
-    );
+
+allowedOrigins.add(
+    FRONTEND_URL.replace(
+        /\/$/,
+        ""
+    )
+);
+
 }
 
 const corsOptions = {
-    origin(origin, callback) {
 
-        // Allow server-to-server / curl requests
-        if (!origin) {
-            return callback(null, true);
-        }
+origin(
+    origin,
+    callback
+) {
 
-        // Allowed frontend
-        if (allowedOrigins.has(origin)) {
-            return callback(null, true);
-        }
+    /*
+    ----------------------------------------------------
+    Server-to-server / curl
+    ----------------------------------------------------
+    */
 
-        // Telegram WebView
-        if (
-            origin === "null" ||
-            origin.startsWith(
-                "https://web.telegram.org"
-            )
-        ) {
-            return callback(null, true);
-        }
-
-        // Development
-        if (
-            process.env.NODE_ENV !==
-            "production"
-        ) {
-            return callback(null, true);
-        }
+    if (!origin) {
 
         return callback(
-            new Error(
-                "CORS origin not allowed."
-            )
+            null,
+            true
         );
-    },
 
-    methods: [
-        "GET",
-        "POST",
-        "PUT",
-        "PATCH",
-        "DELETE",
-        "OPTIONS"
-    ],
+    }
 
-    allowedHeaders: [
-        "Content-Type",
-        "Accept",
-        "Authorization",
-        "X-Requested-With"
-    ],
 
-    exposedHeaders: [
-        "Content-Type"
-    ],
+    /*
+    ----------------------------------------------------
+    GitHub Pages frontend
+    ----------------------------------------------------
+    */
 
-    credentials: false,
+    if (
+        allowedOrigins.has(
+            origin
+        )
+    ) {
 
-    optionsSuccessStatus: 204,
+        return callback(
+            null,
+            true
+        );
 
-    maxAge: 86400
+    }
+
+
+    /*
+    ----------------------------------------------------
+    Telegram WebView
+    ----------------------------------------------------
+    */
+
+    if (
+        origin === "null" ||
+        origin.startsWith(
+            "https://web.telegram.org"
+        )
+    ) {
+
+        return callback(
+            null,
+            true
+        );
+
+    }
+
+
+    /*
+    ----------------------------------------------------
+    Development mode
+    ----------------------------------------------------
+    */
+
+    if (
+        process.env.NODE_ENV !==
+        "production"
+    ) {
+
+        return callback(
+            null,
+            true
+        );
+
+    }
+
+
+    return callback(
+        new Error(
+            "CORS origin not allowed."
+        )
+    );
+
+},
+
+
+methods: [
+
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS"
+
+],
+
+
+allowedHeaders: [
+
+    "Content-Type",
+    "Accept",
+    "Authorization",
+    "X-Requested-With"
+
+],
+
+
+exposedHeaders: [
+
+    "Content-Type"
+
+],
+
+
+credentials: false,
+
+
+optionsSuccessStatus: 204,
+
+
+maxAge: 86400
+
 };
 
-app.use(cors(corsOptions));
-
-/*
-============================================================
-SECURITY
-============================================================
-*/
-
 app.use(
-    helmet({
-        crossOriginResourcePolicy: false
-    })
+cors(
+corsOptions
+)
 );
 
 /*
-============================================================
+
+SECURITY HEADERS
+
+*/
+
+app.use(
+
+helmet({
+
+    crossOriginResourcePolicy:
+        false
+
+})
+
+);
+
+/*
+
 BODY PARSER
-============================================================
+
 */
 
 app.use(
-    express.json({
-        limit: "100kb"
-    })
+
+express.json({
+
+    limit:
+        "100kb"
+
+})
+
 );
 
 app.use(
-    express.urlencoded({
-        extended: false,
-        limit: "100kb"
-    })
+
+express.urlencoded({
+
+    extended:
+        false,
+
+    limit:
+        "100kb"
+
+})
+
 );
 
 /*
-============================================================
+
 RATE LIMITING
-============================================================
+
 */
 
-// General API limiter
-const apiLimiter = rateLimit({
-    windowMs: 60 * 1000,
+/*
 
-    limit: 100,
+GENERAL API LIMITER
 
-    standardHeaders: true,
+*/
 
-    legacyHeaders: false,
+const apiLimiter =
+rateLimit({
+
+    windowMs:
+        60 * 1000,
+
+    limit:
+        100,
+
+    standardHeaders:
+        true,
+
+    legacyHeaders:
+        false,
 
     message: {
-        success: false,
+
+        success:
+            false,
+
         error:
             "Too many requests. Please try again later."
+
     }
+
 });
 
-// Authentication limiter
-const authLimiter = rateLimit({
-    windowMs: 60 * 1000,
+/*
 
-    limit: 20,
+AUTH LIMITER
 
-    standardHeaders: true,
+*/
 
-    legacyHeaders: false,
+const authLimiter =
+rateLimit({
+
+    windowMs:
+        60 * 1000,
+
+    limit:
+        20,
+
+    standardHeaders:
+        true,
+
+    legacyHeaders:
+        false,
 
     message: {
-        success: false,
+
+        success:
+            false,
+
         error:
             "Too many authentication requests. Please try again later."
+
     }
+
 });
 
-// Game limiter
-const gameLimiter = rateLimit({
-    windowMs: 60 * 1000,
+/*
 
-    limit: 60,
+GAME LIMITER
 
-    standardHeaders: true,
+*/
 
-    legacyHeaders: false,
+const gameLimiter =
+rateLimit({
+
+    windowMs:
+        60 * 1000,
+
+    limit:
+        60,
+
+    standardHeaders:
+        true,
+
+    legacyHeaders:
+        false,
 
     message: {
-        success: false,
+
+        success:
+            false,
+
         error:
             "Too many game requests. Please try again later."
+
     }
+
 });
 
+/*
+
+REWARDS LIMITER
+
+Rewards are more sensitive than normal API requests.
+
+This protects:
+
+- Daily Bonus
+- Lucky Roll
+- Reward status
+
+---
+
+*/
+
+const rewardsLimiter =
+rateLimit({
+
+    windowMs:
+        60 * 1000,
+
+    limit:
+        30,
+
+    standardHeaders:
+        true,
+
+    legacyHeaders:
+        false,
+
+    message: {
+
+        success:
+            false,
+
+        error:
+            "Too many reward requests. Please try again later."
+
+    }
+
+});
+
+/*
+
+APPLY GENERAL API LIMITER
+
+*/
+
 app.use(
-    "/api/",
-    apiLimiter
+"/api/",
+apiLimiter
 );
 
 /*
-============================================================
+
 ROOT
-============================================================
+
 */
 
-app.get("/", (req, res) => {
+app.get(
+"/",
+(req, res) => {
 
     return res.json({
-        success: true,
+
+        success:
+            true,
 
         message:
             "Memory Coins backend is running 🚀",
@@ -223,209 +425,289 @@ app.get("/", (req, res) => {
 
         timestamp:
             new Date().toISOString()
+
     });
 
-});
+}
+
+);
 
 /*
-============================================================
+
 HEALTH CHECK
-============================================================
+
 */
 
 app.get(
-    "/api/health",
-    async (req, res) => {
+"/api/health",
+async (req, res) => {
 
-        try {
+    try {
 
-            const result =
-                await pool.query(
-                    "SELECT NOW() AS now"
-                );
-
-            return res.json({
-                success: true,
-
-                status: "ok",
-
-                database: "connected",
-
-                timestamp:
-                    result.rows[0].now
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Health check error:",
-                error
+        const result =
+            await pool.query(
+                "SELECT NOW() AS now"
             );
 
-            return res.status(500).json({
-                success: false,
 
-                status: "error",
+        return res.json({
 
-                database: "disconnected"
-            });
+            success:
+                true,
 
-        }
+            status:
+                "ok",
+
+            database:
+                "connected",
+
+            timestamp:
+                result.rows[0].now
+
+        });
+
+
+    } catch (error) {
+
+        console.error(
+            "Health check error:",
+            error
+        );
+
+
+        return res.status(
+            500
+        ).json({
+
+            success:
+                false,
+
+            status:
+                "error",
+
+            database:
+                "disconnected"
+
+        });
 
     }
+
+}
+
 );
 
 /*
-============================================================
-AUTH ROUTES
-============================================================
-*/
 
-/*
+AUTH ROUTES
+
 POST /api/auth/telegram
 GET  /api/auth/me
 POST /api/auth/logout
+
+Authentication itself does not require
+a previous Bearer token.
+
+============================================================
 */
 
 app.use(
-    "/api/auth",
-    authLimiter,
-    authRoutes
+"/api/auth",
+authLimiter,
+authRoutes
 );
 
 /*
-============================================================
-GAME ROUTES
-============================================================
-*/
 
-/*
+GAME ROUTES
+
 GET  /api/game/status
 POST /api/game/start
 POST /api/game/complete
 
+All game routes require authentication.
+
+============================================================
+*/
+
+app.use(
+"/api/game",
+gameLimiter,
+requireAuth,
+gameRoutes
+);
+
+/*
+
+REWARD ROUTES
+
+POST /api/rewards/daily
+POST /api/rewards/lucky-roll
+GET  /api/rewards/status
+
+All reward routes require authentication.
+
 IMPORTANT:
-All game routes require a valid
-Bearer authentication token.
+
+The order here matters.
+
+requireAuth runs before rewardsRoutes.
+
+Therefore:
+
+req.user
+is available inside rewards.js.
+
+============================================================
 */
 
 app.use(
-    "/api/game",
-    gameLimiter,
-    requireAuth,
-    gameRoutes
+"/api/rewards",
+rewardsLimiter,
+requireAuth,
+rewardsRoutes
 );
 
 /*
-============================================================
+
 404 HANDLER
-============================================================
+
 */
 
 app.use(
-    (req, res) => {
+(req, res) => {
 
-        return res.status(404).json({
-            success: false,
+    return res.status(
+        404
+    ).json({
 
-            error:
-                "Route not found."
-        });
+        success:
+            false,
 
-    }
+        error:
+            "Route not found."
+
+    });
+
+}
+
 );
 
 /*
-============================================================
+
 GLOBAL ERROR HANDLER
-============================================================
+
 */
 
 app.use(
-    (error, req, res, next) => {
+(
+error,
+req,
+res,
+next
+) => {
 
-        console.error(
-            "Global error:",
-            error
-        );
+    console.error(
+        "Global error:",
+        error
+    );
 
-        return res.status(500).json({
-            success: false,
 
-            error:
-                "Internal server error."
-        });
+    return res.status(
+        500
+    ).json({
 
-    }
+        success:
+            false,
+
+        error:
+            "Internal server error."
+
+    });
+
+}
+
 );
 
 /*
-============================================================
+
 START SERVER
-============================================================
+
 */
 
 const server =
-    app.listen(
-        PORT,
-        () => {
+app.listen(
+PORT,
+() => {
 
-            console.log(
-                `Memory Coins backend running on port ${PORT}`
-            );
+        console.log(
+            `Memory Coins backend running on port ${PORT}`
+        );
 
-        }
-    );
+    }
+);
 
 /*
-============================================================
+
 GRACEFUL SHUTDOWN
-============================================================
+
 */
 
 async function shutdown(
-    signal
+signal
 ) {
 
-    console.log(
-        `${signal} received. Shutting down...`
-    );
+console.log(
+    `${signal} received. Shutting down...`
+);
 
-    server.close(
-        async () => {
 
-            try {
+server.close(
+    async () => {
 
-                await pool.end();
+        try {
 
-                console.log(
-                    "PostgreSQL connection pool closed."
-                );
+            await pool.end();
 
-                process.exit(0);
 
-            } catch (error) {
+            console.log(
+                "PostgreSQL connection pool closed."
+            );
 
-                console.error(
-                    "Shutdown error:",
-                    error
-                );
 
-                process.exit(1);
+            process.exit(
+                0
+            );
 
-            }
+
+        } catch (error) {
+
+            console.error(
+                "Shutdown error:",
+                error
+            );
+
+
+            process.exit(
+                1
+            );
 
         }
-    );
+
+    }
+);
 
 }
 
 process.on(
-    "SIGTERM",
-    () => shutdown("SIGTERM")
+"SIGTERM",
+() => shutdown(
+"SIGTERM"
+)
 );
 
 process.on(
-    "SIGINT",
-    () => shutdown("SIGINT")
+"SIGINT",
+() => shutdown(
+"SIGINT"
+)
 );
