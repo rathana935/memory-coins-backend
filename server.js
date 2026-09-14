@@ -10,6 +10,7 @@ import authRoutes from "./routes/auth.js";
 import gameRoutes from "./routes/game.js";
 import rewardsRoutes from "./routes/rewards.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
+import withdrawalRoutes from "./routes/withdrawals.js";
 
 import { requireAuth } from "./middleware/auth.js";
 
@@ -19,10 +20,6 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || "development";
-
-/* =========================================================
-   TRUST PROXY
-========================================================= */
 
 app.set("trust proxy", 1);
 
@@ -52,24 +49,19 @@ if (process.env.FRONTEND_URL) {
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      // Allow requests without Origin header
-      // such as health checks/server-to-server requests.
+    origin(origin, callback) {
       if (!origin) {
         return callback(null, true);
       }
 
-      // Development mode
       if (NODE_ENV !== "production") {
         return callback(null, true);
       }
 
-      // Telegram Mini App / GitHub Pages / configured frontend
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 
-      // Telegram may send special origins in some WebView cases
       if (
         origin.startsWith("https://web.telegram.org") ||
         origin.startsWith("https://webk.telegram.org")
@@ -101,7 +93,7 @@ app.use(
 );
 
 /* =========================================================
-   BODY PARSER
+   BODY PARSING
 ========================================================= */
 
 app.use(
@@ -118,99 +110,118 @@ app.use(
 );
 
 /* =========================================================
-   GLOBAL RATE LIMITER
+   GLOBAL RATE LIMIT
 ========================================================= */
 
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
-
   limit: 100,
 
   standardHeaders: "draft-7",
-
   legacyHeaders: false,
 
   message: {
     success: false,
-    error: "Too many requests. Please try again later."
+    error:
+      "Too many requests. Please try again later."
   }
 });
 
 app.use(globalLimiter);
 
 /* =========================================================
-   AUTH RATE LIMITER
+   AUTH RATE LIMIT
 ========================================================= */
 
 const authLimiter = rateLimit({
   windowMs: 60 * 1000,
-
   limit: 20,
 
   standardHeaders: "draft-7",
-
   legacyHeaders: false,
 
   message: {
     success: false,
-    error: "Too many authentication requests."
+    error:
+      "Too many authentication requests."
   }
 });
 
 /* =========================================================
-   GAME RATE LIMITER
+   GAME RATE LIMIT
 ========================================================= */
 
 const gameLimiter = rateLimit({
   windowMs: 60 * 1000,
-
   limit: 60,
 
   standardHeaders: "draft-7",
-
   legacyHeaders: false,
 
   message: {
     success: false,
-    error: "Too many game requests."
+    error:
+      "Too many game requests."
   }
 });
 
 /* =========================================================
-   REWARDS RATE LIMITER
+   REWARDS RATE LIMIT
 ========================================================= */
 
 const rewardsLimiter = rateLimit({
   windowMs: 60 * 1000,
-
   limit: 30,
 
   standardHeaders: "draft-7",
-
   legacyHeaders: false,
 
   message: {
     success: false,
-    error: "Too many reward requests."
+    error:
+      "Too many reward requests."
   }
 });
 
 /* =========================================================
-   LEADERBOARD RATE LIMITER
+   LEADERBOARD RATE LIMIT
 ========================================================= */
 
 const leaderboardLimiter = rateLimit({
   windowMs: 60 * 1000,
-
   limit: 60,
 
   standardHeaders: "draft-7",
-
   legacyHeaders: false,
 
   message: {
     success: false,
-    error: "Too many leaderboard requests."
+    error:
+      "Too many leaderboard requests."
+  }
+});
+
+/* =========================================================
+   WITHDRAWAL RATE LIMIT
+========================================================= */
+
+const withdrawalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+
+  /*
+   Withdrawal requests are sensitive.
+   Keep this much lower than normal API traffic.
+  */
+
+  limit: 10,
+
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+
+  message: {
+    success: false,
+    error:
+      "Too many withdrawal requests. Please try again later."
   }
 });
 
@@ -231,7 +242,10 @@ app.get("/health", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Health check database error:", error);
+    console.error(
+      "Health check database error:",
+      error
+    );
 
     return res.status(503).json({
       success: false,
@@ -246,7 +260,7 @@ app.get("/health", async (req, res) => {
 ========================================================= */
 
 app.get("/", (req, res) => {
-  res.json({
+  return res.json({
     success: true,
     name: "Memory Coins API",
     version: "1.0.0",
@@ -255,7 +269,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================================================
-   AUTH ROUTES
+   AUTH
 ========================================================= */
 
 app.use(
@@ -265,7 +279,7 @@ app.use(
 );
 
 /* =========================================================
-   GAME ROUTES
+   GAME
 ========================================================= */
 
 app.use(
@@ -276,7 +290,7 @@ app.use(
 );
 
 /* =========================================================
-   REWARDS ROUTES
+   REWARDS
 ========================================================= */
 
 app.use(
@@ -287,7 +301,7 @@ app.use(
 );
 
 /* =========================================================
-   LEADERBOARD ROUTES
+   LEADERBOARD
 ========================================================= */
 
 app.use(
@@ -298,7 +312,18 @@ app.use(
 );
 
 /* =========================================================
-   404 HANDLER
+   WITHDRAWALS
+========================================================= */
+
+app.use(
+  "/api/withdrawals",
+  withdrawalLimiter,
+  requireAuth,
+  withdrawalRoutes
+);
+
+/* =========================================================
+   404
 ========================================================= */
 
 app.use((req, res) => {
@@ -314,9 +339,14 @@ app.use((req, res) => {
 ========================================================= */
 
 app.use((error, req, res, next) => {
-  console.error("Unhandled server error:", error);
+  console.error(
+    "Unhandled server error:",
+    error
+  );
 
-  if (error.message?.startsWith("CORS:")) {
+  if (
+    error.message?.startsWith("CORS:")
+  ) {
     return res.status(403).json({
       success: false,
       error: "Origin not allowed."
@@ -333,35 +363,65 @@ app.use((error, req, res, next) => {
    START SERVER
 ========================================================= */
 
-const server = app.listen(PORT, () => {
-  console.log("========================================");
-  console.log("Memory Coins Backend");
-  console.log("========================================");
-  console.log(`Environment: ${NODE_ENV}`);
-  console.log(`Port: ${PORT}`);
-  console.log(`Server: http://localhost:${PORT}`);
-  console.log("========================================");
-});
+const server = app.listen(
+  PORT,
+  () => {
+    console.log(
+      "========================================"
+    );
+
+    console.log(
+      "Memory Coins Backend"
+    );
+
+    console.log(
+      "========================================"
+    );
+
+    console.log(
+      `Environment: ${NODE_ENV}`
+    );
+
+    console.log(
+      `Port: ${PORT}`
+    );
+
+    console.log(
+      `Server: http://localhost:${PORT}`
+    );
+
+    console.log(
+      "========================================"
+    );
+  }
+);
 
 /* =========================================================
    GRACEFUL SHUTDOWN
 ========================================================= */
 
 async function shutdown(signal) {
-  console.log(`${signal} received. Shutting down...`);
+  console.log(
+    `${signal} received. Shutting down...`
+  );
 
   server.close(async () => {
     try {
       await pool.end();
 
-      console.log("Database pool closed.");
-      console.log("Server stopped.");
+      console.log(
+        "Database pool closed."
+      );
+
+      console.log(
+        "Server stopped."
+      );
 
       process.exit(0);
 
     } catch (error) {
       console.error(
-        "Error during shutdown:",
+        "Shutdown error:",
         error
       );
 
