@@ -3,6 +3,9 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 import pool from "./db/pool.js";
 
@@ -21,6 +24,65 @@ const app = express();
 
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || "development";
+
+/* =========================================================
+   ADSGRAM DATABASE MIGRATION
+========================================================= */
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function runAdsgramMigration() {
+  const migrationFile = path.join(
+    __dirname,
+    "db",
+    "migrations",
+    "001_adsgram_rewards.sql"
+  );
+
+  try {
+    console.log("========================================");
+    console.log("AdsGram Database Migration");
+    console.log("========================================");
+
+    if (!fs.existsSync(migrationFile)) {
+      throw new Error(
+        `Migration file not found: ${migrationFile}`
+      );
+    }
+
+    const sql = fs.readFileSync(
+      migrationFile,
+      "utf8"
+    );
+
+    await pool.query(sql);
+
+    console.log(
+      "AdsGram database migration completed successfully."
+    );
+
+    console.log("========================================");
+
+  } catch (error) {
+    console.error(
+      "AdsGram database migration failed:",
+      error
+    );
+
+    throw error;
+  }
+}
+
+/* =========================================================
+   RUN MIGRATION BEFORE SERVER START
+========================================================= */
+
+await runAdsgramMigration();
+
+/* =========================================================
+   TRUST PROXY
+========================================================= */
 
 app.set("trust proxy", 1);
 
