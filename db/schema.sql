@@ -1,6 +1,18 @@
 -- ============================================================
 -- MEMORY COINS
 -- PostgreSQL Production Schema
+-- Supports:
+-- Telegram users
+-- Memory Card game
+-- 5 lives / 1-hour life cooldown
+-- Daily Bonus
+-- Lucky Roll
+-- AdsGram
+-- Achievements
+-- Leaderboard
+-- Referral Program (+250 coins)
+-- FaucetPay withdrawals
+-- ABA Bank withdrawals
 -- ============================================================
 
 BEGIN;
@@ -13,83 +25,89 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS users (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-telegram_id BIGINT NOT NULL UNIQUE,
+    telegram_id BIGINT NOT NULL UNIQUE,
 
-username VARCHAR(64),
+    username VARCHAR(64),
 
-first_name VARCHAR(255),
+    first_name VARCHAR(255),
 
-last_name VARCHAR(255),
+    last_name VARCHAR(255),
 
-photo_url TEXT,
+    photo_url TEXT,
 
-language_code VARCHAR(20),
+    language_code VARCHAR(20),
 
-is_premium BOOLEAN NOT NULL
-    DEFAULT FALSE,
+    is_premium BOOLEAN NOT NULL
+        DEFAULT FALSE,
 
-coins BIGINT NOT NULL
-    DEFAULT 0
-    CHECK (coins >= 0),
+    coins BIGINT NOT NULL
+        DEFAULT 0
+        CHECK (coins >= 0),
 
-today_coins BIGINT NOT NULL
-    DEFAULT 0
-    CHECK (today_coins >= 0),
+    today_coins BIGINT NOT NULL
+        DEFAULT 0
+        CHECK (today_coins >= 0),
 
-games_played INTEGER NOT NULL
-    DEFAULT 0
-    CHECK (games_played >= 0),
+    games_played INTEGER NOT NULL
+        DEFAULT 0
+        CHECK (games_played >= 0),
 
-easy_games INTEGER NOT NULL
-    DEFAULT 0
-    CHECK (easy_games >= 0),
+    easy_games INTEGER NOT NULL
+        DEFAULT 0
+        CHECK (easy_games >= 0),
 
-medium_games INTEGER NOT NULL
-    DEFAULT 0
-    CHECK (medium_games >= 0),
+    medium_games INTEGER NOT NULL
+        DEFAULT 0
+        CHECK (medium_games >= 0),
 
-hard_games INTEGER NOT NULL
-    DEFAULT 0
-    CHECK (hard_games >= 0),
+    hard_games INTEGER NOT NULL
+        DEFAULT 0
+        CHECK (hard_games >= 0),
 
-easy_level INTEGER NOT NULL
-    DEFAULT 1
-    CHECK (easy_level BETWEEN 1 AND 100),
+    easy_level INTEGER NOT NULL
+        DEFAULT 1
+        CHECK (easy_level BETWEEN 1 AND 100),
 
-medium_level INTEGER NOT NULL
-    DEFAULT 1
-    CHECK (medium_level BETWEEN 1 AND 100),
+    medium_level INTEGER NOT NULL
+        DEFAULT 1
+        CHECK (medium_level BETWEEN 1 AND 100),
 
-hard_level INTEGER NOT NULL
-    DEFAULT 1
-    CHECK (hard_level BETWEEN 1 AND 100),
+    hard_level INTEGER NOT NULL
+        DEFAULT 1
+        CHECK (hard_level BETWEEN 1 AND 100),
 
-lives INTEGER NOT NULL
-    DEFAULT 5
-    CHECK (lives BETWEEN 0 AND 5),
+    -- ========================================================
+    -- LIFE SYSTEM
+    -- Maximum 5 lives
+    -- Life cooldown handled by backend
+    -- ========================================================
 
-last_life_at TIMESTAMPTZ,
+    lives INTEGER NOT NULL
+        DEFAULT 5
+        CHECK (lives BETWEEN 0 AND 5),
 
-daily_streak INTEGER NOT NULL
-    DEFAULT 0
-    CHECK (daily_streak >= 0),
+    last_life_at TIMESTAMPTZ,
 
-last_daily_claim DATE,
+    daily_streak INTEGER NOT NULL
+        DEFAULT 0
+        CHECK (daily_streak >= 0),
 
-is_blocked BOOLEAN NOT NULL
-    DEFAULT FALSE,
+    last_daily_claim DATE,
 
-created_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    is_blocked BOOLEAN NOT NULL
+        DEFAULT FALSE,
 
-updated_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-last_seen_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
+
+    last_seen_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW()
 
 );
 
@@ -103,31 +121,92 @@ CREATE INDEX IF NOT EXISTS idx_users_last_seen
 ON users(last_seen_at);
 
 -- ============================================================
+-- REFERRAL SYSTEM
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS referrals (
+
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
+
+    referrer_user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    referred_user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+    reward_coins BIGINT NOT NULL
+        DEFAULT 250
+        CHECK (reward_coins >= 0),
+
+    status VARCHAR(20) NOT NULL
+        DEFAULT 'completed'
+        CHECK (
+            status IN (
+                'pending',
+                'completed',
+                'cancelled'
+            )
+        ),
+
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
+
+    completed_at TIMESTAMPTZ,
+
+    -- A user can only be referred once.
+    UNIQUE(referred_user_id),
+
+    -- Prevent duplicate referrer/referred relationships.
+    UNIQUE(
+        referrer_user_id,
+        referred_user_id
+    ),
+
+    -- A user cannot refer themselves.
+    CHECK (
+        referrer_user_id <> referred_user_id
+    )
+
+);
+
+CREATE INDEX IF NOT EXISTS idx_referrals_referrer
+ON referrals(referrer_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_referrals_referred
+ON referrals(referred_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_referrals_status
+ON referrals(status);
+
+-- ============================================================
 -- AUTH SESSIONS
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS auth_sessions (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-token_hash CHAR(64) NOT NULL UNIQUE,
+    token_hash CHAR(64) NOT NULL UNIQUE,
 
-expires_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
 
-created_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-last_used_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-user_agent TEXT,
+    user_agent TEXT,
 
-ip_address INET
+    ip_address INET
 
 );
 
@@ -143,56 +222,56 @@ ON auth_sessions(expires_at);
 
 CREATE TABLE IF NOT EXISTS game_sessions (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-difficulty VARCHAR(20) NOT NULL
-    CHECK (
-        difficulty IN (
-            'easy',
-            'medium',
-            'hard'
-        )
-    ),
+    difficulty VARCHAR(20) NOT NULL
+        CHECK (
+            difficulty IN (
+                'easy',
+                'medium',
+                'hard'
+            )
+        ),
 
-level INTEGER NOT NULL
-    CHECK (level BETWEEN 1 AND 100),
+    level INTEGER NOT NULL
+        CHECK (level BETWEEN 1 AND 100),
 
-pairs INTEGER NOT NULL
-    CHECK (pairs > 0),
+    pairs INTEGER NOT NULL
+        CHECK (pairs > 0),
 
-reward_coins INTEGER NOT NULL
-    CHECK (reward_coins >= 0),
+    reward_coins INTEGER NOT NULL
+        CHECK (reward_coins >= 0),
 
-status VARCHAR(20) NOT NULL
-    DEFAULT 'started'
-    CHECK (
-        status IN (
-            'started',
-            'completed',
-            'abandoned',
-            'expired'
-        )
-    ),
+    status VARCHAR(20) NOT NULL
+        DEFAULT 'started'
+        CHECK (
+            status IN (
+                'started',
+                'completed',
+                'abandoned',
+                'expired'
+            )
+        ),
 
-started_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    started_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-completed_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
 
-moves INTEGER,
+    moves INTEGER,
 
-duration_seconds INTEGER,
+    duration_seconds INTEGER,
 
-completion_token UUID NOT NULL
-    DEFAULT gen_random_uuid(),
+    completion_token UUID NOT NULL
+        DEFAULT gen_random_uuid(),
 
-created_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW()
 
 );
 
@@ -211,29 +290,29 @@ ON game_sessions(completion_token);
 
 CREATE TABLE IF NOT EXISTS game_results (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-game_session_id UUID NOT NULL UNIQUE
-    REFERENCES game_sessions(id)
-    ON DELETE CASCADE,
+    game_session_id UUID NOT NULL UNIQUE
+        REFERENCES game_sessions(id)
+        ON DELETE CASCADE,
 
-difficulty VARCHAR(20) NOT NULL,
+    difficulty VARCHAR(20) NOT NULL,
 
-level INTEGER NOT NULL,
+    level INTEGER NOT NULL,
 
-reward_coins INTEGER NOT NULL,
+    reward_coins INTEGER NOT NULL,
 
-moves INTEGER NOT NULL,
+    moves INTEGER NOT NULL,
 
-duration_seconds INTEGER NOT NULL,
+    duration_seconds INTEGER NOT NULL,
 
-completed_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+    completed_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW()
 
 );
 
@@ -249,28 +328,28 @@ ON game_results(completed_at);
 
 CREATE TABLE IF NOT EXISTS daily_bonus_claims (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-claim_date DATE NOT NULL,
+    claim_date DATE NOT NULL,
 
-day_number INTEGER NOT NULL
-    CHECK (day_number BETWEEN 1 AND 7),
+    day_number INTEGER NOT NULL
+        CHECK (day_number BETWEEN 1 AND 7),
 
-reward_coins INTEGER NOT NULL
-    CHECK (reward_coins > 0),
+    reward_coins INTEGER NOT NULL
+        CHECK (reward_coins > 0),
 
-created_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-UNIQUE(
-    user_id,
-    claim_date
-)
+    UNIQUE(
+        user_id,
+        claim_date
+    )
 
 );
 
@@ -283,29 +362,29 @@ ON daily_bonus_claims(user_id);
 
 CREATE TABLE IF NOT EXISTS lucky_rolls (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-roll_number INTEGER NOT NULL
-    CHECK (
-        roll_number BETWEEN 1 AND 99999
-    ),
+    roll_number INTEGER NOT NULL
+        CHECK (
+            roll_number BETWEEN 1 AND 99999
+        ),
 
-reward_coins INTEGER NOT NULL
-    CHECK (reward_coins >= 0),
+    reward_coins INTEGER NOT NULL
+        CHECK (reward_coins >= 0),
 
-ad_required BOOLEAN NOT NULL
-    DEFAULT TRUE,
+    ad_required BOOLEAN NOT NULL
+        DEFAULT TRUE,
 
-ad_completed BOOLEAN NOT NULL
-    DEFAULT FALSE,
+    ad_completed BOOLEAN NOT NULL
+        DEFAULT FALSE,
 
-rolled_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+    rolled_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW()
 
 );
 
@@ -321,41 +400,41 @@ ON lucky_rolls(rolled_at);
 
 CREATE TABLE IF NOT EXISTS ad_rewards (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-provider VARCHAR(50) NOT NULL,
+    provider VARCHAR(50) NOT NULL,
 
-ad_type VARCHAR(50) NOT NULL,
+    ad_type VARCHAR(50) NOT NULL,
 
-external_reward_id VARCHAR(255),
+    external_reward_id VARCHAR(255),
 
-reward_coins NUMERIC(20,4) NOT NULL
-    CHECK (reward_coins >= 0),
+    reward_coins NUMERIC(20,4) NOT NULL
+        CHECK (reward_coins >= 0),
 
-status VARCHAR(20) NOT NULL
-    DEFAULT 'pending'
-    CHECK (
-        status IN (
-            'pending',
-            'confirmed',
-            'rejected'
-        )
-    ),
+    status VARCHAR(20) NOT NULL
+        DEFAULT 'pending'
+        CHECK (
+            status IN (
+                'pending',
+                'confirmed',
+                'rejected'
+            )
+        ),
 
-created_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-confirmed_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
 
-UNIQUE(
-    provider,
-    external_reward_id
-)
+    UNIQUE(
+        provider,
+        external_reward_id
+    )
 
 );
 
@@ -371,42 +450,42 @@ ON ad_rewards(provider);
 
 CREATE TABLE IF NOT EXISTS achievements (
 
-id VARCHAR(50) PRIMARY KEY,
+    id VARCHAR(50) PRIMARY KEY,
 
-title VARCHAR(255) NOT NULL,
+    title VARCHAR(255) NOT NULL,
 
-description TEXT NOT NULL,
+    description TEXT NOT NULL,
 
-icon VARCHAR(20),
+    icon VARCHAR(20),
 
-requirement_type VARCHAR(50) NOT NULL,
+    requirement_type VARCHAR(50) NOT NULL,
 
-requirement_value INTEGER NOT NULL,
+    requirement_value INTEGER NOT NULL,
 
-reward_coins INTEGER NOT NULL
-    DEFAULT 0
+    reward_coins INTEGER NOT NULL
+        DEFAULT 0
 
 );
 
 CREATE TABLE IF NOT EXISTS user_achievements (
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-achievement_id VARCHAR(50) NOT NULL
-    REFERENCES achievements(id)
-    ON DELETE CASCADE,
+    achievement_id VARCHAR(50) NOT NULL
+        REFERENCES achievements(id)
+        ON DELETE CASCADE,
 
-progress INTEGER NOT NULL
-    DEFAULT 0,
+    progress INTEGER NOT NULL
+        DEFAULT 0,
 
-unlocked_at TIMESTAMPTZ,
+    unlocked_at TIMESTAMPTZ,
 
-PRIMARY KEY(
-    user_id,
-    achievement_id
-)
+    PRIMARY KEY(
+        user_id,
+        achievement_id
+    )
 
 );
 
@@ -416,27 +495,27 @@ PRIMARY KEY(
 
 CREATE TABLE IF NOT EXISTS coin_transactions (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-type VARCHAR(50) NOT NULL,
+    type VARCHAR(50) NOT NULL,
 
-amount BIGINT NOT NULL,
+    amount BIGINT NOT NULL,
 
-balance_before BIGINT NOT NULL,
+    balance_before BIGINT NOT NULL,
 
-balance_after BIGINT NOT NULL,
+    balance_after BIGINT NOT NULL,
 
-reference_id UUID,
+    reference_id UUID,
 
-description TEXT,
+    description TEXT,
 
-created_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW()
 
 );
 
@@ -451,51 +530,102 @@ ON coin_transactions(type);
 
 -- ============================================================
 -- WITHDRAWALS
+-- Supports:
+-- FaucetPay
+-- ABA Bank
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS withdrawals (
 
-id UUID PRIMARY KEY
-    DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY
+        DEFAULT gen_random_uuid(),
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-provider VARCHAR(50) NOT NULL
-    DEFAULT 'faucetpay',
+    provider VARCHAR(50) NOT NULL
+        DEFAULT 'faucetpay'
+        CHECK (
+            provider IN (
+                'faucetpay',
+                'aba'
+            )
+        ),
 
-amount_coins BIGINT NOT NULL
-    CHECK (amount_coins >= 2500),
+    amount_coins BIGINT NOT NULL
+        CHECK (amount_coins >= 2500),
 
-amount_usd NUMERIC(20,8) NOT NULL,
+    amount_usd NUMERIC(20,8) NOT NULL
+        CHECK (amount_usd > 0),
 
-faucetpay_email TEXT NOT NULL,
+    -- ========================================================
+    -- FAUCETPAY
+    -- NULL when provider = ABA
+    -- ========================================================
 
-status VARCHAR(30) NOT NULL
-    DEFAULT 'pending'
+    faucetpay_email TEXT,
+
+    -- ========================================================
+    -- ABA BANK
+    -- NULL when provider = FaucetPay
+    -- ========================================================
+
+    aba_account_name VARCHAR(255),
+
+    aba_account_number VARCHAR(100),
+
+    -- ========================================================
+    -- WITHDRAWAL STATUS
+    -- ========================================================
+
+    status VARCHAR(30) NOT NULL
+        DEFAULT 'pending'
+        CHECK (
+            status IN (
+                'pending',
+                'processing',
+                'paid',
+                'failed',
+                'cancelled',
+                'refunded'
+            )
+        ),
+
+    provider_transaction_id TEXT,
+
+    failure_reason TEXT,
+
+    requested_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
+
+    processed_at TIMESTAMPTZ,
+
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
+
+    -- ========================================================
+    -- PROVIDER-SPECIFIC VALIDATION
+    -- ========================================================
+
     CHECK (
-        status IN (
-            'pending',
-            'processing',
-            'paid',
-            'failed',
-            'cancelled',
-            'refunded'
+        (
+            provider = 'faucetpay'
+            AND faucetpay_email IS NOT NULL
+            AND LENGTH(TRIM(faucetpay_email)) > 0
+            AND aba_account_name IS NULL
+            AND aba_account_number IS NULL
         )
-    ),
-
-provider_transaction_id TEXT,
-
-failure_reason TEXT,
-
-requested_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
-
-processed_at TIMESTAMPTZ,
-
-updated_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+        OR
+        (
+            provider = 'aba'
+            AND aba_account_name IS NOT NULL
+            AND LENGTH(TRIM(aba_account_name)) > 0
+            AND aba_account_number IS NOT NULL
+            AND LENGTH(TRIM(aba_account_number)) > 0
+            AND faucetpay_email IS NULL
+        )
+    )
 
 );
 
@@ -504,6 +634,9 @@ ON withdrawals(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_status
 ON withdrawals(status);
+
+CREATE INDEX IF NOT EXISTS idx_withdrawals_provider
+ON withdrawals(provider);
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_created
 ON withdrawals(requested_at DESC);
@@ -514,31 +647,31 @@ ON withdrawals(requested_at DESC);
 
 CREATE TABLE IF NOT EXISTS leaderboard_scores (
 
-user_id UUID NOT NULL
-    REFERENCES users(id)
-    ON DELETE CASCADE,
+    user_id UUID NOT NULL
+        REFERENCES users(id)
+        ON DELETE CASCADE,
 
-period_type VARCHAR(20) NOT NULL
-    CHECK (
-        period_type IN (
-            'weekly',
-            'all_time'
-        )
-    ),
+    period_type VARCHAR(20) NOT NULL
+        CHECK (
+            period_type IN (
+                'weekly',
+                'all_time'
+            )
+        ),
 
-period_start DATE,
+    period_start DATE,
 
-coins BIGINT NOT NULL
-    DEFAULT 0,
+    coins BIGINT NOT NULL
+        DEFAULT 0,
 
-updated_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW(),
 
-PRIMARY KEY(
-    user_id,
-    period_type,
-    period_start
-)
+    PRIMARY KEY(
+        user_id,
+        period_type,
+        period_start
+    )
 
 );
 
@@ -548,12 +681,12 @@ PRIMARY KEY(
 
 CREATE TABLE IF NOT EXISTS app_settings (
 
-key VARCHAR(100) PRIMARY KEY,
+    key VARCHAR(100) PRIMARY KEY,
 
-value JSONB NOT NULL,
+    value JSONB NOT NULL,
 
-updated_at TIMESTAMPTZ NOT NULL
-    DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT NOW()
 
 );
 
@@ -563,55 +696,55 @@ updated_at TIMESTAMPTZ NOT NULL
 
 INSERT INTO achievements
 (
-id,
-title,
-description,
-icon,
-requirement_type,
-requirement_value,
-reward_coins
+    id,
+    title,
+    description,
+    icon,
+    requirement_type,
+    requirement_value,
+    reward_coins
 )
 
 VALUES
 
 (
-'first',
-'First Game',
-'Complete your first game.',
-'🎮',
-'games_played',
-1,
-0
+    'first',
+    'First Game',
+    'Complete your first game.',
+    '🎮',
+    'games_played',
+    1,
+    0
 ),
 
 (
-'five',
-'5 Games',
-'Complete 5 games.',
-'🔥',
-'games_played',
-5,
-0
+    'five',
+    '5 Games',
+    'Complete 5 games.',
+    '🔥',
+    'games_played',
+    5,
+    0
 ),
 
 (
-'fast',
-'Memory Master',
-'Complete a game under 30 seconds.',
-'⚡',
-'fast_game',
-30,
-0
+    'fast',
+    'Memory Master',
+    'Complete a game under 30 seconds.',
+    '⚡',
+    'fast_game',
+    30,
+    0
 ),
 
 (
-'coins',
-'Coin Collector',
-'Collect 10,000 coins.',
-'💰',
-'coins',
-10000,
-0
+    'coins',
+    'Coin Collector',
+    'Collect 10,000 coins.',
+    '💰',
+    'coins',
+    10000,
+    0
 )
 
 ON CONFLICT (id)
@@ -623,20 +756,21 @@ DO NOTHING;
 
 INSERT INTO app_settings
 (
-key,
-value
+    key,
+    value
 )
 
 VALUES
 
 (
-'economy',
+    'economy',
 
-'{
-    "coins_per_usd": 10000,
-    "minimum_withdrawal": 2500,
-    "daily_bonus": 100
-}'::jsonb
+    '{
+        "coins_per_usd": 10000,
+        "minimum_withdrawal": 2500,
+        "daily_bonus": 100,
+        "referral_reward": 250
+    }'::jsonb
 
 ),
 
@@ -645,30 +779,30 @@ VALUES
 -- ============================================================
 
 (
-'levels',
+    'levels',
 
-'{
-    "easy": {
-        "pairs": 4,
-        "cards": 8,
-        "reward": 10,
-        "max_levels": 100
-    },
+    '{
+        "easy": {
+            "pairs": 4,
+            "cards": 8,
+            "reward": 10,
+            "max_levels": 100
+        },
 
-    "medium": {
-        "pairs": 6,
-        "cards": 12,
-        "reward": 12,
-        "max_levels": 100
-    },
+        "medium": {
+            "pairs": 6,
+            "cards": 12,
+            "reward": 12,
+            "max_levels": 100
+        },
 
-    "hard": {
-        "pairs": 8,
-        "cards": 16,
-        "reward": 15,
-        "max_levels": 100
-    }
-}'::jsonb
+        "hard": {
+            "pairs": 8,
+            "cards": 16,
+            "reward": 15,
+            "max_levels": 100
+        }
+    }'::jsonb
 
 ),
 
@@ -677,22 +811,47 @@ VALUES
 -- ============================================================
 
 (
-'lucky_roll',
+    'lucky_roll',
 
-'{
-    "cooldown_seconds": 300,
-    "minimum": 1,
-    "maximum": 99999,
+    '{
+        "cooldown_seconds": 300,
+        "minimum": 1,
+        "maximum": 99999,
 
-    "rewards": {
-        "default": 5,
-        "90000": 8,
-        "95000": 12,
-        "99500": 18,
-        "99997": 82,
-        "99999": 10000
-    }
-}'::jsonb
+        "rewards": {
+            "default": 5,
+            "90000": 8,
+            "95000": 12,
+            "99500": 18,
+            "99997": 82,
+            "99999": 10000
+        }
+    }'::jsonb
+
+)
+
+ON CONFLICT (key)
+DO NOTHING;
+
+-- ============================================================
+-- REFERRAL SETTINGS
+-- ============================================================
+
+INSERT INTO app_settings
+(
+    key,
+    value
+)
+
+VALUES
+
+(
+    'referral',
+
+    '{
+        "enabled": true,
+        "reward_coins": 250
+    }'::jsonb
 
 )
 
@@ -709,9 +868,9 @@ RETURNS TRIGGER AS $$
 
 BEGIN
 
-NEW.updated_at = NOW();
+    NEW.updated_at = NOW();
 
-RETURN NEW;
+    RETURN NEW;
 
 END;
 
