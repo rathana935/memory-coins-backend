@@ -11,6 +11,7 @@ import gameRoutes from "./routes/game.js";
 import rewardsRoutes from "./routes/rewards.js";
 import leaderboardRoutes from "./routes/leaderboard.js";
 import withdrawalRoutes from "./routes/withdrawals.js";
+import referralRoutes from "./routes/referrals.js";
 
 import { requireAuth } from "./middleware/auth.js";
 
@@ -208,11 +209,6 @@ const leaderboardLimiter = rateLimit({
 const withdrawalLimiter = rateLimit({
   windowMs: 60 * 1000,
 
-  /*
-   Withdrawal requests are sensitive.
-   Keep this much lower than normal API traffic.
-  */
-
   limit: 10,
 
   standardHeaders: "draft-7",
@@ -222,6 +218,25 @@ const withdrawalLimiter = rateLimit({
     success: false,
     error:
       "Too many withdrawal requests. Please try again later."
+  }
+});
+
+/* =========================================================
+   REFERRAL RATE LIMIT
+========================================================= */
+
+const referralLimiter = rateLimit({
+  windowMs: 60 * 1000,
+
+  limit: 30,
+
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+
+  message: {
+    success: false,
+    error:
+      "Too many referral requests. Please try again later."
   }
 });
 
@@ -323,6 +338,17 @@ app.use(
 );
 
 /* =========================================================
+   REFERRALS
+========================================================= */
+
+app.use(
+  "/api/referrals",
+  referralLimiter,
+  requireAuth,
+  referralRoutes
+);
+
+/* =========================================================
    404
 ========================================================= */
 
@@ -388,6 +414,10 @@ const server = app.listen(
 
     console.log(
       `Server: http://localhost:${PORT}`
+    );
+
+    console.log(
+      "Referral API: /api/referrals"
     );
 
     console.log(
