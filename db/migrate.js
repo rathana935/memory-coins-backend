@@ -1,207 +1,152 @@
+import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 const { Client } = pg;
-
-/* =========================================================
-   PATH SETUP
-========================================================= */
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const migrationFile = path.join(
-    __dirname,
-    "migrations",
-    "001_adsgram_rewards.sql"
-);
+const migrationsDir = path.join(__dirname, "migrations");
 
+if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL is missing");
+}
 
-/* =========================================================
-   MIGRATION
-========================================================= */
+const client = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl:
+        process.env.NODE_ENV === "production"
+            ? { rejectUnauthorized: false }
+            : false,
+    connectionTimeoutMillis: 10000
+});
 
-async function migrate() {
-    let client;
+async function ensureMigrationTable() {
+    await client.query(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            filename VARCHAR(255) PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+}
 
+async function getMigrationFiles() {
+    if (!fs.existsSync(migrationsDir)) {
+        throw new Error(`Migration directory not found: ${migrationsDir}`);
+    }
+
+    return fs
+        .readdirSync(migrationsDir)
+        .filter(file => file.endsWith(".sql"))
+        .sort();
+}
+
+async function getAppliedMigrations() {
+    const result = await client.query(`
+        SELECT filename
+        FROM schema_migrations
+        ORDER BY filename;
+    `);
+
+    return new Set(result.rows.map(row => row.filename));
+}
+
+async function runMigration(filename) {
+    const filePath = path.join(migrationsDir, filename);
+
+    const sql = fs.readFileSync(filePath, "utf8").trim();
+
+    if (!sql) {
+        throw new Error(`Migration file is empty: ${filename}`);
+    }
+
+    console.log(`\n▶ Running migration: ${filename}`);
+
+    /*
+     * Migration files currently contain their own
+     * BEGIN / COMMIT statements, so we execute them
+     * directly instead of wrapping them in another
+     * transaction.
+     */
+    await client.query(sql);
+
+    /*
+     * Record the migration only after it completed
+     * successfully.
+     */
+    await client.query(
+        `
+        INSERT INTO schema_migrations (filename)
+        VALUES ($1)
+        ON CONFLICT (filename) DO NOTHING;
+        `,
+        [filename]
+    );
+
+    console.log(`✓ Migration completed: ${filename}`);
+}
+
+async function main() {
     try {
         console.log("========================================");
-        console.log("Memory Coins Database Migration");
+        console.log(" Memory Card Database Migration");
         console.log("========================================");
-
-
-        /* -------------------------------------------------
-           DATABASE URL CHECK
-        ------------------------------------------------- */
-
-        if (!process.env.DATABASE_URL) {
-            throw new Error(
-                "DATABASE_URL environment variable is missing."
-            );
-        }
-
-
-        /* -------------------------------------------------
-           MIGRATION FILE CHECK
-        ------------------------------------------------- */
-
-        if (!fs.existsSync(migrationFile)) {
-            throw new Error(
-                `Migration file not found: ${migrationFile}`
-            );
-        }
-
-
-        /* -------------------------------------------------
-           DATABASE CONNECTION
-        ------------------------------------------------- */
-
-        console.log(
-            "Connecting to PostgreSQL..."
-        );
-
-        client = new Client({
-            connectionString:
-                process.env.DATABASE_URL,
-
-            ssl:
-                process.env.NODE_ENV === "production"
-                    ? {
-                        rejectUnauthorized: false
-                    }
-                    : false,
-
-            connectionTimeoutMillis: 10000
-        });
 
         await client.connect();
 
-        console.log(
-            "PostgreSQL connected."
-        );
+        console.log("✓ Database connected");
 
+        await ensureMigrationTable();
 
-        /* -------------------------------------------------
-           READ MIGRATION
-        ------------------------------------------------- */
+        console.log("✓ Migration table ready");
 
-        const sql =
-            fs.readFileSync(
-                migrationFile,
-                "utf8"
-            );
+        const files = await getMigrationFiles();
 
-
-        if (!sql.trim()) {
-            throw new Error(
-                "Migration file is empty."
-            );
+        if (files.length === 0) {
+            console.log("No migration files found.");
+            return;
         }
 
+        const applied = await getAppliedMigrations();
 
-        /* -------------------------------------------------
-           RUN MIGRATION
-        ------------------------------------------------- */
+        let pendingCount = 0;
 
-        console.log(
-            "Running migration:"
-        );
+        for (const filename of files) {
+            if (applied.has(filename)) {
+                console.log(`✓ Already applied: ${filename}`);
+                continue;
+            }
 
-        console.log(
-            "001_adsgram_rewards.sql"
-        );
-
-        await client.query("BEGIN");
-
-        try {
-            await client.query(sql);
-
-            await client.query("COMMIT");
-
-        } catch (migrationError) {
-
-            await client.query("ROLLBACK");
-
-            throw migrationError;
+            await runMigration(filename);
+            pendingCount++;
         }
 
+        console.log("\n========================================");
 
-        /* -------------------------------------------------
-           SUCCESS
-        ------------------------------------------------- */
+        if (pendingCount === 0) {
+            console.log("✓ Database is already up to date.");
+        } else {
+            console.log(`✓ Applied ${pendingCount} migration(s).`);
+        }
 
-        console.log(
-            "Migration completed successfully."
-        );
-
-        console.log(
-            "AdsGram database fields are ready."
-        );
-
-        console.log(
-            "========================================"
-        );
+        console.log("========================================");
 
     } catch (error) {
-
-        console.error(
-            "Migration failed:"
-        );
-
-        console.error(
-            error.message
-        );
-
-        if (error.stack) {
-            console.error(
-                error.stack
-            );
-        }
+        console.error("\n✗ Migration failed:");
+        console.error(error);
 
         process.exitCode = 1;
 
     } finally {
-
-        /* -------------------------------------------------
-           CLOSE DATABASE CONNECTION
-        ------------------------------------------------- */
-
-        if (client) {
-            try {
-                await client.end();
-
-                console.log(
-                    "PostgreSQL connection closed."
-                );
-
-            } catch (closeError) {
-
-                console.error(
-                    "Failed to close PostgreSQL connection:"
-                );
-
-                console.error(
-                    closeError.message
-                );
-
-                process.exitCode = 1;
-            }
+        try {
+            await client.end();
+        } catch {
+            // Ignore connection-close errors
         }
-
-        console.log(
-            "========================================"
-        );
     }
 }
 
-
-/* =========================================================
-   START
-========================================================= */
-
-migrate();
+main();
