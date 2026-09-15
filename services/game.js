@@ -3,76 +3,47 @@ import pool from "../db/pool.js";
 
 /*
 ============================================================
-MEMORY CARD - GAME SERVICE
+MEMORY CARD GAME SERVICE
 ============================================================
 
-GAME RULES
-------------------------------------------------------------
+SERVER-AUTHORITATIVE GAME
+
 Easy:
-- 2 x 4 cards
+- 2 x 4
 - 4 pairs
-- 10 coins
+- +10 coins
 - 100 games
 
 Medium:
-- 3 x 4 cards
+- 3 x 4
 - 6 pairs
-- 12 coins
+- +12 coins
 - 100 games
 
 Hard:
-- 4 x 4 cards
+- 4 x 4
 - 8 pairs
-- 15 coins
+- +15 coins
 - 100 games
 
-LIVES
-------------------------------------------------------------
-- Maximum 5 lives
-- Starting a game consumes 1 life
-- 1 life regenerates every 60 minutes
-- Server controls regeneration
-
-REWARDS
-------------------------------------------------------------
-Normal game:
-    Easy   = +10
-    Medium = +12
-    Hard   = +15
-
-Double Reward is handled ONLY by:
-    services/rewards.js
-
-SECURITY
-------------------------------------------------------------
-- Server controls rewards
-- Server controls game sessions
-- Server generates completion token
-- Duplicate completion blocked
-- Balance updates are transactional
-- Client cannot request arbitrary reward
-- Client cannot request multiplier
-- Client cannot choose double reward amount
+Lives:
+- Maximum 5
+- 1 life every 60 minutes
 
 IMPORTANT
 ------------------------------------------------------------
-The current completion-token system prevents simple
-unauthorized requests, but a production version should
-eventually use server-verifiable puzzle state to prove
-that the player actually matched all cards.
+The server generates and stores the puzzle deck.
 
-The server NEVER trusts:
-- client reward amount
-- client multiplier
-- client coin amount
-- client "doubleReward" value
-============================================================
-*/
+The client receives the deck and displays it.
 
+When completing the game, the client sends the pairs
+it matched.
 
-/*
-============================================================
-LIFE CONFIGURATION
+The server verifies those pairs against the stored deck
+before awarding coins.
+
+Double Reward is NOT handled here.
+It is handled only by services/rewards.js.
 ============================================================
 */
 
@@ -89,7 +60,7 @@ const LIFE_COOLDOWN_MS =
 
 /*
 ============================================================
-GAME CONFIGURATION
+GAME CONFIG
 ============================================================
 */
 
@@ -124,13 +95,42 @@ const GAME_CONFIG = {
 
 /*
 ============================================================
+CARD SYMBOLS
+============================================================
+
+These are only visual identifiers.
+
+The server still verifies the actual deck.
+============================================================
+*/
+
+const CARD_SYMBOLS = [
+    "🍎",
+    "🍌",
+    "🍇",
+    "🍉",
+    "🍓",
+    "🍒",
+    "🍍",
+    "🥝",
+    "🥑",
+    "🍋",
+    "🥥",
+    "🍑",
+    "🍊",
+    "🍐",
+    "🍈",
+    "🥕"
+];
+
+
+/*
+============================================================
 VALIDATION
 ============================================================
 */
 
-function isValidDifficulty(
-    difficulty
-) {
+function isValidDifficulty(difficulty) {
 
     return Object.prototype.hasOwnProperty.call(
         GAME_CONFIG,
@@ -140,129 +140,87 @@ function isValidDifficulty(
 }
 
 
-/*
-============================================================
-UUID VALIDATION
-============================================================
-*/
-
 function isValidUUID(value) {
 
-    if (
-        typeof value !== "string"
-    ) {
+    if (typeof value !== "string") {
         return false;
     }
 
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-        .test(
-            value.trim()
-        );
+        .test(value.trim());
 
 }
 
 
 /*
 ============================================================
-GENERATE COMPLETION TOKEN
+TOKEN
 ============================================================
 */
 
 function generateCompletionToken() {
 
-    return crypto.randomUUID();
+    return crypto.randomBytes(32).toString("hex");
 
 }
 
 
 /*
 ============================================================
-GAME SESSION ID
+GAME ID
 ============================================================
 */
 
 function normalizeGameSessionId(value) {
 
-    return String(
-        value ?? ""
-    ).trim();
+    return String(value ?? "").trim();
 
 }
 
 
 /*
 ============================================================
-DATE HELPERS
+LIFE HELPERS
 ============================================================
 */
 
-function calculateNextLifeAt(
-    lastLifeAt
-) {
+function calculateNextLifeAt(lastLifeAt) {
 
     if (!lastLifeAt) {
-
         return null;
-
     }
 
     const timestamp =
-        new Date(
-            lastLifeAt
-        ).getTime();
+        new Date(lastLifeAt).getTime();
 
-
-    if (
-        Number.isNaN(timestamp)
-    ) {
-
+    if (Number.isNaN(timestamp)) {
         return null;
-
     }
 
-
     return new Date(
-        timestamp +
-        LIFE_COOLDOWN_MS
+        timestamp + LIFE_COOLDOWN_MS
     );
 
 }
 
 
-function calculateSecondsUntil(
-    date
-) {
+function calculateSecondsUntil(date) {
 
     if (!date) {
-
         return null;
-
     }
 
     const timestamp =
-        new Date(
-            date
-        ).getTime();
+        new Date(date).getTime();
 
-
-    if (
-        Number.isNaN(timestamp)
-    ) {
-
+    if (Number.isNaN(timestamp)) {
         return null;
-
     }
-
-
-    const milliseconds =
-        timestamp -
-        Date.now();
-
 
     return Math.max(
         0,
         Math.ceil(
-            milliseconds / 1000
+            (timestamp - Date.now()) / 1000
         )
     );
 
@@ -271,15 +229,263 @@ function calculateSecondsUntil(
 
 /*
 ============================================================
-RECOVER LIVES
+SHUFFLE
 ============================================================
 
-IMPORTANT:
+Cryptographically stronger shuffle than Math.random().
+============================================================
+*/
 
-The user row is locked with FOR UPDATE.
+function secureShuffle(array) {
 
-This prevents two simultaneous requests from recovering
-the same life twice.
+    const result = [...array];
+
+    for (
+        let i = result.length - 1;
+        i > 0;
+        i--
+    ) {
+
+        const randomBytes =
+            crypto.randomBytes(4);
+
+        const randomNumber =
+            randomBytes.readUInt32BE(0);
+
+        const j =
+            randomNumber %
+            (i + 1);
+
+        [
+            result[i],
+            result[j]
+        ] = [
+            result[j],
+            result[i]
+        ];
+    }
+
+    return result;
+
+}
+
+
+/*
+============================================================
+GENERATE PUZZLE
+============================================================
+*/
+
+function generatePuzzle(pairCount) {
+
+    if (
+        pairCount < 1 ||
+        pairCount > CARD_SYMBOLS.length
+    ) {
+        throw new Error(
+            "INVALID_PUZZLE_PAIR_COUNT"
+        );
+    }
+
+    const symbols =
+        CARD_SYMBOLS.slice(
+            0,
+            pairCount
+        );
+
+    const cards = [];
+
+    for (
+        let pairId = 0;
+        pairId < pairCount;
+        pairId++
+    ) {
+
+        cards.push({
+            pairId,
+            symbol: symbols[pairId]
+        });
+
+        cards.push({
+            pairId,
+            symbol: symbols[pairId]
+        });
+
+    }
+
+    return secureShuffle(cards);
+}
+
+
+/*
+============================================================
+PUBLIC PUZZLE
+============================================================
+
+We don't expose internal database information.
+============================================================
+*/
+
+function createPublicPuzzle(deck) {
+
+    return deck.map(
+        (card, index) => ({
+            index,
+            symbol: card.symbol
+        })
+    );
+
+}
+
+
+/*
+============================================================
+VERIFY PUZZLE
+============================================================
+
+Expected:
+
+[
+    [0, 3],
+    [1, 7],
+    [2, 5],
+    ...
+]
+
+Every board index must appear exactly once.
+
+Each submitted pair must contain two different
+positions that belong to the same server-generated pair.
+
+This proves that the submitted solution corresponds
+to the actual server-generated puzzle.
+============================================================
+*/
+
+function verifyPuzzleSolution(
+    deck,
+    matchedPairs
+) {
+
+    if (!Array.isArray(deck)) {
+        return false;
+    }
+
+    if (!Array.isArray(matchedPairs)) {
+        return false;
+    }
+
+    const expectedCards =
+        deck.length;
+
+    if (
+        expectedCards === 0 ||
+        expectedCards % 2 !== 0
+    ) {
+        return false;
+    }
+
+    const expectedPairs =
+        expectedCards / 2;
+
+    if (
+        matchedPairs.length !==
+        expectedPairs
+    ) {
+        return false;
+    }
+
+    const usedIndexes =
+        new Set();
+
+    for (
+        const pair of matchedPairs
+    ) {
+
+        if (
+            !Array.isArray(pair) ||
+            pair.length !== 2
+        ) {
+            return false;
+        }
+
+        const first =
+            Number(pair[0]);
+
+        const second =
+            Number(pair[1]);
+
+        if (
+            !Number.isInteger(first) ||
+            !Number.isInteger(second)
+        ) {
+            return false;
+        }
+
+        if (
+            first < 0 ||
+            first >= expectedCards ||
+            second < 0 ||
+            second >= expectedCards
+        ) {
+            return false;
+        }
+
+        if (first === second) {
+            return false;
+        }
+
+        if (
+            usedIndexes.has(first) ||
+            usedIndexes.has(second)
+        ) {
+            return false;
+        }
+
+        const firstCard =
+            deck[first];
+
+        const secondCard =
+            deck[second];
+
+        if (
+            !firstCard ||
+            !secondCard
+        ) {
+            return false;
+        }
+
+        if (
+            firstCard.pairId !==
+            secondCard.pairId
+        ) {
+            return false;
+        }
+
+        usedIndexes.add(first);
+        usedIndexes.add(second);
+    }
+
+    /*
+    --------------------------------------------------------
+    Every card must have been matched.
+    --------------------------------------------------------
+    */
+
+    if (
+        usedIndexes.size !==
+        expectedCards
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+
+/*
+============================================================
+RECOVER LIVES
 ============================================================
 */
 
@@ -302,49 +508,29 @@ export async function recoverLives(
             [userId]
         );
 
-
-    if (
-        result.rowCount === 0
-    ) {
+    if (result.rowCount === 0) {
 
         const error =
-            new Error(
-                "USER_NOT_FOUND"
-            );
+            new Error("USER_NOT_FOUND");
 
         error.code =
             "USER_NOT_FOUND";
 
         throw error;
-
     }
-
 
     const user =
         result.rows[0];
 
-
     let lives =
-        Number(
-            user.lives
-        );
-
-
-    /*
-    --------------------------------------------------------
-    PROTECT INVALID LIFE VALUES
-    --------------------------------------------------------
-    */
+        Number(user.lives);
 
     if (
         !Number.isInteger(lives) ||
         lives < 0
     ) {
-
         lives = 0;
-
     }
-
 
     lives =
         Math.min(
@@ -352,16 +538,13 @@ export async function recoverLives(
             lives
         );
 
-
     /*
     --------------------------------------------------------
     FULL LIVES
     --------------------------------------------------------
     */
 
-    if (
-        lives >= MAX_LIVES
-    ) {
+    if (lives >= MAX_LIVES) {
 
         await client.query(
             `
@@ -378,78 +561,38 @@ export async function recoverLives(
             ]
         );
 
-
         return {
-
-            lives:
-                MAX_LIVES,
-
-            nextLifeAt:
-                null,
-
-            secondsUntilNextLife:
-                0,
-
-            maxLives:
-                MAX_LIVES
-
+            lives: MAX_LIVES,
+            nextLifeAt: null,
+            secondsUntilNextLife: 0,
+            maxLives: MAX_LIVES
         };
-
     }
-
 
     /*
     --------------------------------------------------------
-    NO ACTIVE TIMER
+    NO TIMER
     --------------------------------------------------------
     */
 
-    if (
-        !user.last_life_at
-    ) {
+    if (!user.last_life_at) {
 
         return {
-
             lives,
-
-            nextLifeAt:
-                null,
-
-            secondsUntilNextLife:
-                null,
-
-            maxLives:
-                MAX_LIVES
-
+            nextLifeAt: null,
+            secondsUntilNextLife: null,
+            maxLives: MAX_LIVES
         };
-
     }
-
 
     const lastLifeAt =
-        new Date(
-            user.last_life_at
-        );
-
-
-    /*
-    --------------------------------------------------------
-    INVALID DATE PROTECTION
-    --------------------------------------------------------
-    */
+        new Date(user.last_life_at);
 
     if (
         Number.isNaN(
             lastLifeAt.getTime()
         )
     ) {
-
-        const nextLifeAt =
-            new Date(
-                Date.now() +
-                LIFE_COOLDOWN_MS
-            );
-
 
         await client.query(
             `
@@ -462,71 +605,44 @@ export async function recoverLives(
             [userId]
         );
 
+        const nextLifeAt =
+            new Date(
+                Date.now() +
+                LIFE_COOLDOWN_MS
+            );
 
         return {
-
             lives,
-
             nextLifeAt,
-
             secondsUntilNextLife:
                 calculateSecondsUntil(
                     nextLifeAt
                 ),
-
-            maxLives:
-                MAX_LIVES
-
+            maxLives: MAX_LIVES
         };
-
     }
-
-
-    /*
-    --------------------------------------------------------
-    FUTURE TIMESTAMP PROTECTION
-    --------------------------------------------------------
-    */
 
     const elapsedMilliseconds =
         Date.now() -
         lastLifeAt.getTime();
 
-
-    if (
-        elapsedMilliseconds < 0
-    ) {
+    if (elapsedMilliseconds < 0) {
 
         const nextLifeAt =
             calculateNextLifeAt(
                 lastLifeAt
             );
 
-
         return {
-
             lives,
-
             nextLifeAt,
-
             secondsUntilNextLife:
                 calculateSecondsUntil(
                     nextLifeAt
                 ),
-
-            maxLives:
-                MAX_LIVES
-
+            maxLives: MAX_LIVES
         };
-
     }
-
-
-    /*
-    --------------------------------------------------------
-    CALCULATE RECOVERED LIVES
-    --------------------------------------------------------
-    */
 
     const recoveredLives =
         Math.floor(
@@ -534,41 +650,23 @@ export async function recoverLives(
             LIFE_COOLDOWN_MS
         );
 
-
-    if (
-        recoveredLives <= 0
-    ) {
+    if (recoveredLives <= 0) {
 
         const nextLifeAt =
             calculateNextLifeAt(
                 lastLifeAt
             );
 
-
         return {
-
             lives,
-
             nextLifeAt,
-
             secondsUntilNextLife:
                 calculateSecondsUntil(
                     nextLifeAt
                 ),
-
-            maxLives:
-                MAX_LIVES
-
+            maxLives: MAX_LIVES
         };
-
     }
-
-
-    /*
-    --------------------------------------------------------
-    CALCULATE NEW LIFE COUNT
-    --------------------------------------------------------
-    */
 
     const newLives =
         Math.min(
@@ -576,16 +674,7 @@ export async function recoverLives(
             lives + recoveredLives
         );
 
-
-    /*
-    --------------------------------------------------------
-    ALL LIVES RECOVERED
-    --------------------------------------------------------
-    */
-
-    if (
-        newLives >= MAX_LIVES
-    ) {
+    if (newLives >= MAX_LIVES) {
 
         await client.query(
             `
@@ -602,44 +691,13 @@ export async function recoverLives(
             ]
         );
 
-
         return {
-
-            lives:
-                MAX_LIVES,
-
-            nextLifeAt:
-                null,
-
-            secondsUntilNextLife:
-                0,
-
-            maxLives:
-                MAX_LIVES
-
+            lives: MAX_LIVES,
+            nextLifeAt: null,
+            secondsUntilNextLife: 0,
+            maxLives: MAX_LIVES
         };
-
     }
-
-
-    /*
-    --------------------------------------------------------
-    PRESERVE REMAINING TIME
-    --------------------------------------------------------
-
-    Example:
-
-    Last life: 10:00
-    Current time: 11:20
-
-    One life recovered at 11:00.
-
-    Next life:
-    12:00
-
-    We preserve that remaining 40 minutes.
-    --------------------------------------------------------
-    */
 
     const newLastLifeAt =
         new Date(
@@ -649,7 +707,6 @@ export async function recoverLives(
                 LIFE_COOLDOWN_MS
             )
         );
-
 
     await client.query(
         `
@@ -667,30 +724,20 @@ export async function recoverLives(
         ]
     );
 
-
     const nextLifeAt =
         calculateNextLifeAt(
             newLastLifeAt
         );
 
-
     return {
-
-        lives:
-            newLives,
-
+        lives: newLives,
         nextLifeAt,
-
         secondsUntilNextLife:
             calculateSecondsUntil(
                 nextLifeAt
             ),
-
-        maxLives:
-            MAX_LIVES
-
+        maxLives: MAX_LIVES
     };
-
 }
 
 
@@ -720,48 +767,23 @@ export async function startGame(
             "INVALID_DIFFICULTY";
 
         throw error;
-
     }
 
-
     const config =
-        GAME_CONFIG[
-            difficulty
-        ];
-
+        GAME_CONFIG[difficulty];
 
     const client =
         await pool.connect();
 
-
     try {
 
-        await client.query(
-            "BEGIN"
-        );
-
-
-        /*
-        ----------------------------------------------------
-        LOCK USER + RECOVER LIVES
-        ----------------------------------------------------
-        */
+        await client.query("BEGIN");
 
         const lifeState =
             await recoverLives(
                 client,
                 userId
             );
-
-
-        /*
-        ----------------------------------------------------
-        GET USER PROGRESS
-
-        The row is already locked by recoverLives(),
-        but FOR UPDATE is kept here for clarity.
-        ----------------------------------------------------
-        */
 
         const userResult =
             await client.query(
@@ -782,10 +804,7 @@ export async function startGame(
                 [userId]
             );
 
-
-        if (
-            userResult.rowCount === 0
-        ) {
+        if (userResult.rowCount === 0) {
 
             const error =
                 new Error(
@@ -796,125 +815,60 @@ export async function startGame(
                 "USER_NOT_FOUND";
 
             throw error;
-
         }
-
 
         const user =
             userResult.rows[0];
 
+        if (lifeState.lives <= 0) {
 
-        /*
-        ----------------------------------------------------
-        NO LIVES
-        ----------------------------------------------------
-        */
-
-        if (
-            lifeState.lives <= 0
-        ) {
-
-            await client.query(
-                "COMMIT"
-            );
-
+            await client.query("COMMIT");
 
             return {
-
-                success:
-                    false,
-
-                error:
-                    "NO_LIVES",
-
+                success: false,
+                error: "NO_LIVES",
                 message:
                     "No lives available. Please wait for the next life.",
-
-                lives:
-                    0,
-
-                maxLives:
-                    MAX_LIVES,
-
+                lives: 0,
+                maxLives: MAX_LIVES,
                 nextLifeAt:
                     lifeState.nextLifeAt,
-
                 secondsUntilNextLife:
                     lifeState.secondsUntilNextLife,
-
                 lifeCooldownMinutes:
                     LIFE_COOLDOWN_MINUTES,
-
                 lifeCooldownSeconds:
                     LIFE_COOLDOWN_SECONDS
-
             };
-
         }
-
-
-        /*
-        ----------------------------------------------------
-        GET DIFFICULTY PROGRESS
-        ----------------------------------------------------
-        */
 
         let currentLevel;
         let completedGames;
 
-
-        if (
-            difficulty === "easy"
-        ) {
+        if (difficulty === "easy") {
 
             currentLevel =
-                Number(
-                    user.easy_level
-                );
+                Number(user.easy_level);
 
             completedGames =
-                Number(
-                    user.easy_games
-                );
+                Number(user.easy_games);
 
-        }
-
-        else if (
-            difficulty === "medium"
-        ) {
+        } else if (difficulty === "medium") {
 
             currentLevel =
-                Number(
-                    user.medium_level
-                );
+                Number(user.medium_level);
 
             completedGames =
-                Number(
-                    user.medium_games
-                );
+                Number(user.medium_games);
 
-        }
-
-        else {
+        } else {
 
             currentLevel =
-                Number(
-                    user.hard_level
-                );
+                Number(user.hard_level);
 
             completedGames =
-                Number(
-                    user.hard_games
-                );
-
+                Number(user.hard_games);
         }
-
-
-        /*
-        ----------------------------------------------------
-        PROTECT INVALID PROGRESS
-        ----------------------------------------------------
-        */
 
         if (
             !Number.isInteger(
@@ -922,11 +876,8 @@ export async function startGame(
             ) ||
             currentLevel < 1
         ) {
-
             currentLevel = 1;
-
         }
-
 
         if (
             !Number.isInteger(
@@ -934,11 +885,8 @@ export async function startGame(
             ) ||
             completedGames < 0
         ) {
-
             completedGames = 0;
-
         }
-
 
         /*
         ----------------------------------------------------
@@ -951,54 +899,31 @@ export async function startGame(
             config.maxGames
         ) {
 
-            await client.query(
-                "COMMIT"
-            );
-
+            await client.query("COMMIT");
 
             return {
-
-                success:
-                    false,
-
-                error:
-                    "LEVELS_COMPLETED",
-
+                success: false,
+                error: "LEVELS_COMPLETED",
                 message:
                     `${difficulty} difficulty is already completed.`,
-
                 difficulty,
-
                 completedGames:
                     config.maxGames,
-
                 maxGames:
                     config.maxGames,
-
                 level:
                     Math.min(
                         config.maxGames,
                         currentLevel
                     ),
-
                 lives:
                     Number(
                         lifeState.lives
                     ),
-
                 maxLives:
                     MAX_LIVES
-
             };
-
         }
-
-
-        /*
-        ----------------------------------------------------
-        NORMALIZE LEVEL
-        ----------------------------------------------------
-        */
 
         const level =
             Math.min(
@@ -1009,10 +934,20 @@ export async function startGame(
                 )
             );
 
+        /*
+        ----------------------------------------------------
+        GENERATE SERVER PUZZLE
+        ----------------------------------------------------
+        */
+
+        const puzzleDeck =
+            generatePuzzle(
+                config.pairs
+            );
 
         /*
         ----------------------------------------------------
-        CONSUME ONE LIFE
+        CONSUME LIFE
         ----------------------------------------------------
         */
 
@@ -1021,9 +956,7 @@ export async function startGame(
                 `
                 UPDATE users
                 SET
-
-                    lives =
-                        lives - 1,
+                    lives = lives - 1,
 
                     last_life_at =
                         CASE
@@ -1049,7 +982,6 @@ export async function startGame(
                 ]
             );
 
-
         if (
             updatedUser.rowCount === 0
         ) {
@@ -1063,27 +995,17 @@ export async function startGame(
                 "UNABLE_TO_CONSUME_LIFE";
 
             throw error;
-
         }
-
 
         const updated =
             updatedUser.rows[0];
 
-
-        /*
-        ----------------------------------------------------
-        GENERATE COMPLETION TOKEN
-        ----------------------------------------------------
-        */
-
         const completionToken =
             generateCompletionToken();
 
-
         /*
         ----------------------------------------------------
-        CREATE GAME SESSION
+        CREATE SESSION
         ----------------------------------------------------
         */
 
@@ -1099,7 +1021,9 @@ export async function startGame(
                     reward_coins,
                     status,
                     started_at,
-                    completion_token
+                    completion_token,
+                    puzzle_deck,
+                    puzzle_version
                 )
 
                 VALUES
@@ -1111,7 +1035,9 @@ export async function startGame(
                     $5,
                     'started',
                     NOW(),
-                    $6
+                    $6,
+                    $7::jsonb,
+                    1
                 )
 
                 RETURNING
@@ -1121,7 +1047,8 @@ export async function startGame(
                     pairs,
                     reward_coins,
                     started_at,
-                    completion_token
+                    completion_token,
+                    puzzle_deck
                 `,
                 [
                     userId,
@@ -1129,30 +1056,23 @@ export async function startGame(
                     level,
                     config.pairs,
                     config.reward,
-                    completionToken
+                    completionToken,
+                    JSON.stringify(puzzleDeck)
                 ]
             );
-
 
         if (
             sessionResult.rowCount === 0
         ) {
-
             throw new Error(
                 "GAME_SESSION_CREATE_FAILED"
             );
-
         }
-
 
         const session =
             sessionResult.rows[0];
 
-
-        await client.query(
-            "COMMIT"
-        );
-
+        await client.query("COMMIT");
 
         const nextLifeAt =
             updated.last_life_at
@@ -1161,20 +1081,10 @@ export async function startGame(
                 )
                 : null;
 
-
-        const secondsUntilNextLife =
-            calculateSecondsUntil(
-                nextLifeAt
-            );
-
-
         return {
-
-            success:
-                true,
+            success: true,
 
             game: {
-
                 id:
                     normalizeGameSessionId(
                         session.id
@@ -1184,9 +1094,7 @@ export async function startGame(
                     session.difficulty,
 
                 level:
-                    Number(
-                        session.level
-                    ),
+                    Number(session.level),
 
                 rows:
                     config.rows,
@@ -1195,9 +1103,7 @@ export async function startGame(
                     config.cols,
 
                 pairs:
-                    Number(
-                        session.pairs
-                    ),
+                    Number(session.pairs),
 
                 reward:
                     Number(
@@ -1208,52 +1114,54 @@ export async function startGame(
                     session.completion_token,
 
                 startedAt:
-                    session.started_at
+                    session.started_at,
 
+                /*
+                The frontend needs the deck to render
+                the board.
+
+                pairId is deliberately NOT exposed.
+                */
+
+                cards:
+                    createPublicPuzzle(
+                        session.puzzle_deck
+                    )
             },
 
             lives:
-                Number(
-                    updated.lives
-                ),
+                Number(updated.lives),
 
             maxLives:
                 MAX_LIVES,
 
             nextLifeAt,
 
-            secondsUntilNextLife,
+            secondsUntilNextLife:
+                calculateSecondsUntil(
+                    nextLifeAt
+                ),
 
             lifeCooldownMinutes:
                 LIFE_COOLDOWN_MINUTES,
 
             lifeCooldownSeconds:
                 LIFE_COOLDOWN_SECONDS
-
         };
 
-    }
-
-    catch (error) {
+    } catch (error) {
 
         try {
-
-            await client.query(
-                "ROLLBACK"
-            );
-
+            await client.query("ROLLBACK");
         } catch {}
 
         throw error;
 
-    }
-
-    finally {
+    } finally {
 
         client.release();
 
     }
-
 }
 
 
@@ -1262,32 +1170,30 @@ export async function startGame(
 COMPLETE GAME
 ============================================================
 
-NORMAL REWARD ONLY.
+The server verifies:
 
-This function deliberately does NOT accept:
+- session
+- user
+- completion token
+- difficulty
 - reward
-- coins
-- extraCoins
-- multiplier
-- doubleReward
-- doubleRewardVerified
+- pairs
+- level
+- duration
+- puzzle solution
 
-The normal reward always comes from the server-side
-game session/database configuration.
+Only after verification are coins awarded.
 ============================================================
 */
 
 export async function completeGame({
 
     userId,
-
     gameId,
-
     completionToken,
-
     moves,
-
-    durationSeconds
+    durationSeconds,
+    matchedPairs
 
 }) {
 
@@ -1295,13 +1201,6 @@ export async function completeGame({
         normalizeGameSessionId(
             gameId
         );
-
-
-    /*
-    --------------------------------------------------------
-    VALIDATE GAME ID
-    --------------------------------------------------------
-    */
 
     if (
         !isValidUUID(
@@ -1318,15 +1217,7 @@ export async function completeGame({
             "INVALID_GAME_ID";
 
         throw error;
-
     }
-
-
-    /*
-    --------------------------------------------------------
-    VALIDATE COMPLETION TOKEN
-    --------------------------------------------------------
-    */
 
     if (
         typeof completionToken !==
@@ -1344,27 +1235,16 @@ export async function completeGame({
             "INVALID_COMPLETION_TOKEN";
 
         throw error;
-
     }
 
-
-    /*
-    --------------------------------------------------------
-    VALIDATE MOVES
-    --------------------------------------------------------
-    */
-
     const parsedMoves =
-        Number(
-            moves
-        );
-
+        Number(moves);
 
     if (
         !Number.isInteger(
             parsedMoves
         ) ||
-        parsedMoves < 0 ||
+        parsedMoves < 1 ||
         parsedMoves > 10000
     ) {
 
@@ -1377,27 +1257,16 @@ export async function completeGame({
             "INVALID_MOVES";
 
         throw error;
-
     }
 
-
-    /*
-    --------------------------------------------------------
-    VALIDATE DURATION
-    --------------------------------------------------------
-    */
-
     const parsedDuration =
-        Number(
-            durationSeconds
-        );
-
+        Number(durationSeconds);
 
     if (
         !Number.isFinite(
             parsedDuration
         ) ||
-        parsedDuration < 0 ||
+        parsedDuration < 1 ||
         parsedDuration > 86400
     ) {
 
@@ -1410,32 +1279,33 @@ export async function completeGame({
             "INVALID_DURATION";
 
         throw error;
-
     }
 
+    if (!Array.isArray(matchedPairs)) {
+
+        const error =
+            new Error(
+                "INVALID_PUZZLE_PROOF"
+            );
+
+        error.code =
+            "INVALID_PUZZLE_PROOF";
+
+        throw error;
+    }
 
     const safeMoves =
-        Math.floor(
-            parsedMoves
-        );
-
+        Math.floor(parsedMoves);
 
     const safeDuration =
-        Math.floor(
-            parsedDuration
-        );
-
+        Math.floor(parsedDuration);
 
     const client =
         await pool.connect();
 
-
     try {
 
-        await client.query(
-            "BEGIN"
-        );
-
+        await client.query("BEGIN");
 
         /*
         ----------------------------------------------------
@@ -1456,7 +1326,9 @@ export async function completeGame({
                     status,
                     started_at,
                     completed_at,
-                    completion_token
+                    completion_token,
+                    puzzle_deck,
+                    puzzle_version
 
                 FROM game_sessions
 
@@ -1472,7 +1344,6 @@ export async function completeGame({
                 ]
             );
 
-
         if (
             sessionResult.rowCount === 0
         ) {
@@ -1486,17 +1357,14 @@ export async function completeGame({
                 "GAME_SESSION_NOT_FOUND";
 
             throw error;
-
         }
-
 
         const session =
             sessionResult.rows[0];
 
-
         /*
         ----------------------------------------------------
-        DUPLICATE COMPLETION
+        DUPLICATE
         ----------------------------------------------------
         */
 
@@ -1509,29 +1377,20 @@ export async function completeGame({
                 "ROLLBACK"
             );
 
-
             return {
-
-                success:
-                    false,
-
+                success: false,
                 error:
                     "ALREADY_COMPLETED",
-
                 message:
                     "This game has already been completed.",
-
                 gameSessionId:
                     normalizedGameId
-
             };
-
         }
-
 
         /*
         ----------------------------------------------------
-        VERIFY ACTIVE STATUS
+        ACTIVE SESSION
         ----------------------------------------------------
         */
 
@@ -1549,13 +1408,11 @@ export async function completeGame({
                 "GAME_NOT_ACTIVE";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        VERIFY COMPLETION TOKEN
+        TOKEN
         ----------------------------------------------------
         */
 
@@ -1573,13 +1430,11 @@ export async function completeGame({
                 "INVALID_COMPLETION_TOKEN";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        SERVER GAME CONFIG
+        CONFIG
         ----------------------------------------------------
         */
 
@@ -1587,7 +1442,6 @@ export async function completeGame({
             GAME_CONFIG[
                 session.difficulty
             ];
-
 
         if (!config) {
 
@@ -1600,27 +1454,17 @@ export async function completeGame({
                 "INVALID_GAME_DIFFICULTY";
 
             throw error;
-
         }
-
-
-        /*
-        ----------------------------------------------------
-        VERIFY DATABASE GAME SETTINGS
-        ----------------------------------------------------
-        */
 
         const sessionReward =
             Number(
                 session.reward_coins
             );
 
-
         const sessionPairs =
             Number(
                 session.pairs
             );
-
 
         if (
             sessionReward !==
@@ -1636,9 +1480,7 @@ export async function completeGame({
                 "INVALID_GAME_REWARD";
 
             throw error;
-
         }
-
 
         if (
             sessionPairs !==
@@ -1654,13 +1496,11 @@ export async function completeGame({
                 "INVALID_GAME_PAIRS";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        VERIFY LEVEL
+        LEVEL
         ----------------------------------------------------
         */
 
@@ -1668,7 +1508,6 @@ export async function completeGame({
             Number(
                 session.level
             );
-
 
         if (
             !Number.isInteger(
@@ -1687,46 +1526,56 @@ export async function completeGame({
                 "INVALID_GAME_LEVEL";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        VERIFY START TIME
+        PUZZLE
         ----------------------------------------------------
         */
 
-        if (
-            !session.started_at
-        ) {
+        const puzzleDeck =
+            Array.isArray(
+                session.puzzle_deck
+            )
+                ? session.puzzle_deck
+                : null;
+
+        if (!puzzleDeck) {
 
             const error =
                 new Error(
-                    "INVALID_GAME_START_TIME"
+                    "PUZZLE_NOT_FOUND"
                 );
 
             error.code =
-                "INVALID_GAME_START_TIME";
+                "PUZZLE_NOT_FOUND";
 
             throw error;
-
         }
 
+        const puzzleValid =
+            verifyPuzzleSolution(
+                puzzleDeck,
+                matchedPairs
+            );
+
+        if (!puzzleValid) {
+
+            const error =
+                new Error(
+                    "INVALID_PUZZLE_PROOF"
+                );
+
+            error.code =
+                "INVALID_PUZZLE_PROOF";
+
+            throw error;
+        }
 
         /*
         ----------------------------------------------------
-        BASIC SERVER-SIDE TIME CHECK
-        ----------------------------------------------------
-
-        Prevent impossible negative completion time.
-
-        We intentionally do NOT require the client duration
-        to exactly equal server duration because mobile
-        network latency can affect it.
-
-        Production puzzle verification should eventually
-        use a server-issued puzzle state.
+        SERVER TIME
         ----------------------------------------------------
         */
 
@@ -1734,7 +1583,6 @@ export async function completeGame({
             new Date(
                 session.started_at
             ).getTime();
-
 
         if (
             Number.isNaN(
@@ -1751,9 +1599,7 @@ export async function completeGame({
                 "INVALID_GAME_START_TIME";
 
             throw error;
-
         }
-
 
         const serverElapsedSeconds =
             Math.floor(
@@ -1762,7 +1608,6 @@ export async function completeGame({
                     startedAt
                 ) / 1000
             );
-
 
         if (
             serverElapsedSeconds < 0
@@ -1777,31 +1622,17 @@ export async function completeGame({
                 "INVALID_GAME_TIME";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        MINIMUM REAL SERVER TIME
-
-        A game cannot be completed before it actually
-        started.
-
-        We use a small tolerance for clock/network behavior.
+        CLIENT DURATION CANNOT EXCEED SERVER TIME
         ----------------------------------------------------
         */
-
-        const minimumAllowedDuration =
-            Math.max(
-                0,
-                serverElapsedSeconds - 5
-            );
-
 
         if (
             safeDuration >
-            serverElapsedSeconds + 5
+            serverElapsedSeconds + 10
         ) {
 
             const error =
@@ -1813,46 +1644,7 @@ export async function completeGame({
                 "INVALID_GAME_DURATION";
 
             throw error;
-
         }
-
-
-        if (
-            safeDuration <
-            0
-        ) {
-
-            const error =
-                new Error(
-                    "INVALID_GAME_DURATION"
-                );
-
-            error.code =
-                "INVALID_GAME_DURATION";
-
-            throw error;
-
-        }
-
-
-        /*
-        ----------------------------------------------------
-        NOTE
-
-        `minimumAllowedDuration` is intentionally calculated
-        above for future puzzle verification.
-
-        We don't reject short mobile durations here because
-        the server currently cannot know how fast the player
-        legitimately solved the puzzle.
-
-        The actual puzzle-state verification should be added
-        before production real-money launch.
-        ----------------------------------------------------
-        */
-
-        void minimumAllowedDuration;
-
 
         /*
         ----------------------------------------------------
@@ -1886,7 +1678,6 @@ export async function completeGame({
                 [userId]
             );
 
-
         if (
             userResult.rowCount === 0
         ) {
@@ -1900,17 +1691,12 @@ export async function completeGame({
                 "USER_NOT_FOUND";
 
             throw error;
-
         }
-
 
         const user =
             userResult.rows[0];
 
-
-        if (
-            user.is_blocked
-        ) {
+        if (user.is_blocked) {
 
             const error =
                 new Error(
@@ -1921,21 +1707,10 @@ export async function completeGame({
                 "USER_BLOCKED";
 
             throw error;
-
         }
 
-
-        /*
-        ----------------------------------------------------
-        VERIFY BALANCE
-        ----------------------------------------------------
-        */
-
         const balanceBefore =
-            Number(
-                user.coins
-            );
-
+            Number(user.coins);
 
         if (
             !Number.isSafeInteger(
@@ -1953,18 +1728,15 @@ export async function completeGame({
                 "INVALID_USER_BALANCE";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        VERIFY DIFFICULTY PROGRESS
+        PROGRESS
         ----------------------------------------------------
         */
 
         let currentCompletedGames;
-
 
         if (
             session.difficulty ===
@@ -1976,9 +1748,7 @@ export async function completeGame({
                     user.easy_games
                 );
 
-        }
-
-        else if (
+        } else if (
             session.difficulty ===
             "medium"
         ) {
@@ -1988,17 +1758,13 @@ export async function completeGame({
                     user.medium_games
                 );
 
-        }
-
-        else {
+        } else {
 
             currentCompletedGames =
                 Number(
                     user.hard_games
                 );
-
         }
-
 
         if (
             !Number.isInteger(
@@ -2016,23 +1782,7 @@ export async function completeGame({
                 "INVALID_GAME_PROGRESS";
 
             throw error;
-
         }
-
-
-        /*
-        ----------------------------------------------------
-        LEVEL CONSISTENCY CHECK
-        ----------------------------------------------------
-
-        The session level should represent the next game
-        number.
-
-        We allow an existing session to complete even if
-        another field has changed, but never allow progress
-        beyond 100.
-        ----------------------------------------------------
-        */
 
         if (
             currentCompletedGames >=
@@ -2048,15 +1798,7 @@ export async function completeGame({
                 "DIFFICULTY_ALREADY_COMPLETED";
 
             throw error;
-
         }
-
-
-        /*
-        ----------------------------------------------------
-        PREVENT IMPOSSIBLE LEVEL JUMP
-        ----------------------------------------------------
-        */
 
         if (
             sessionLevel >
@@ -2072,13 +1814,11 @@ export async function completeGame({
                 "INVALID_GAME_PROGRESS";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        MARK GAME COMPLETED
+        MARK SESSION COMPLETED
         ----------------------------------------------------
         */
 
@@ -2098,8 +1838,7 @@ export async function completeGame({
                     AND user_id = $4
                     AND status = 'started'
 
-                RETURNING
-                    id
+                RETURNING id
                 `,
                 [
                     safeMoves,
@@ -2108,7 +1847,6 @@ export async function completeGame({
                     userId
                 ]
             );
-
 
         if (
             completionResult.rowCount === 0
@@ -2123,13 +1861,11 @@ export async function completeGame({
                 "GAME_COMPLETION_FAILED";
 
             throw error;
-
         }
-
 
         /*
         ----------------------------------------------------
-        UPDATE USER BALANCE + PROGRESS
+        UPDATE USER
         ----------------------------------------------------
         */
 
@@ -2139,7 +1875,6 @@ export async function completeGame({
                 UPDATE users
 
                 SET
-
                     coins =
                         coins + $1,
 
@@ -2232,7 +1967,6 @@ export async function completeGame({
                 ]
             );
 
-
         if (
             userUpdate.rowCount === 0
         ) {
@@ -2246,23 +1980,19 @@ export async function completeGame({
                 "USER_UPDATE_FAILED";
 
             throw error;
-
         }
-
 
         const updatedUser =
             userUpdate.rows[0];
-
 
         const balanceAfter =
             Number(
                 updatedUser.coins
             );
 
-
         /*
         ----------------------------------------------------
-        RECORD GAME RESULT
+        GAME RESULT
         ----------------------------------------------------
         */
 
@@ -2293,8 +2023,7 @@ export async function completeGame({
                     NOW()
                 )
 
-                RETURNING
-                    id
+                RETURNING id
                 `,
                 [
                     userId,
@@ -2307,10 +2036,9 @@ export async function completeGame({
                 ]
             );
 
-
         /*
         ----------------------------------------------------
-        RECORD NORMAL GAME COIN TRANSACTION
+        COIN TRANSACTION
         ----------------------------------------------------
         */
 
@@ -2350,22 +2078,11 @@ export async function completeGame({
             ]
         );
 
-
-        await client.query(
-            "COMMIT"
-        );
-
-
-        /*
-        ----------------------------------------------------
-        RETURN RESULT
-        ----------------------------------------------------
-        */
+        await client.query("COMMIT");
 
         return {
 
-            success:
-                true,
+            success: true,
 
             reward:
                 sessionReward,
@@ -2373,22 +2090,11 @@ export async function completeGame({
             baseReward:
                 sessionReward,
 
-            multiplier:
-                1,
+            multiplier: 1,
 
-            doubleReward:
-                false,
+            doubleReward: false,
 
-            /*
-            This means the completed game is eligible
-            to request Double Reward.
-
-            It does NOT mean the ad has already been
-            verified.
-            */
-
-            doubleRewardAvailable:
-                true,
+            doubleRewardAvailable: true,
 
             gameSessionId:
                 normalizedGameId,
@@ -2439,33 +2145,22 @@ export async function completeGame({
                     Number(
                         updatedUser.hard_games
                     )
-
             }
-
         };
 
-    }
-
-    catch (error) {
+    } catch (error) {
 
         try {
-
-            await client.query(
-                "ROLLBACK"
-            );
-
+            await client.query("ROLLBACK");
         } catch {}
 
         throw error;
 
-    }
-
-    finally {
+    } finally {
 
         client.release();
 
     }
-
 }
 
 
@@ -2482,32 +2177,15 @@ export async function getGameStatus(
     const client =
         await pool.connect();
 
-
     try {
 
-        await client.query(
-            "BEGIN"
-        );
-
-
-        /*
-        ----------------------------------------------------
-        RECOVER NATURAL LIVES
-        ----------------------------------------------------
-        */
+        await client.query("BEGIN");
 
         const lifeState =
             await recoverLives(
                 client,
                 userId
             );
-
-
-        /*
-        ----------------------------------------------------
-        GET USER
-        ----------------------------------------------------
-        */
 
         const result =
             await client.query(
@@ -2533,7 +2211,6 @@ export async function getGameStatus(
                 [userId]
             );
 
-
         if (
             result.rowCount === 0
         ) {
@@ -2547,17 +2224,12 @@ export async function getGameStatus(
                 "USER_NOT_FOUND";
 
             throw error;
-
         }
-
 
         const user =
             result.rows[0];
 
-
-        if (
-            user.is_blocked
-        ) {
+        if (user.is_blocked) {
 
             const error =
                 new Error(
@@ -2568,77 +2240,51 @@ export async function getGameStatus(
                 "USER_BLOCKED";
 
             throw error;
-
         }
 
-
-        await client.query(
-            "COMMIT"
-        );
-
+        await client.query("COMMIT");
 
         return {
 
-            success:
-                true,
+            success: true,
 
             coins:
-                Number(
-                    user.coins
-                ),
+                Number(user.coins),
 
             todayCoins:
-                Number(
-                    user.today_coins
-                ),
+                Number(user.today_coins),
 
             gamesPlayed:
-                Number(
-                    user.games_played
-                ),
+                Number(user.games_played),
 
             games: {
 
                 easy:
-                    Number(
-                        user.easy_games
-                    ),
+                    Number(user.easy_games),
 
                 medium:
-                    Number(
-                        user.medium_games
-                    ),
+                    Number(user.medium_games),
 
                 hard:
-                    Number(
-                        user.hard_games
-                    )
+                    Number(user.hard_games)
 
             },
 
             levels: {
 
                 easy:
-                    Number(
-                        user.easy_level
-                    ),
+                    Number(user.easy_level),
 
                 medium:
-                    Number(
-                        user.medium_level
-                    ),
+                    Number(user.medium_level),
 
                 hard:
-                    Number(
-                        user.hard_level
-                    )
+                    Number(user.hard_level)
 
             },
 
             lives:
-                Number(
-                    lifeState.lives
-                ),
+                Number(lifeState.lives),
 
             maxLives:
                 MAX_LIVES,
@@ -2670,39 +2316,25 @@ export async function getGameStatus(
 
         };
 
-    }
-
-    catch (error) {
+    } catch (error) {
 
         try {
-
-            await client.query(
-                "ROLLBACK"
-            );
-
+            await client.query("ROLLBACK");
         } catch {}
 
         throw error;
 
-    }
-
-    finally {
+    } finally {
 
         client.release();
 
     }
-
 }
 
 
 /*
 ============================================================
-EXPORT GAME CONFIG
-
-Useful for routes/tests if needed.
-
-Do not expose this object directly to users unless
-you intentionally want the frontend to know the rules.
+EXPORTS
 ============================================================
 */
 
