@@ -32,7 +32,31 @@ LIVES
 - Starting a game consumes 1 life
 - 1 life regenerates every 60 minutes
 - Server controls regeneration
-- Remaining cooldown is preserved
+
+REWARDS
+------------------------------------------------------------
+Normal game:
+    Easy   = +10
+    Medium = +12
+    Hard   = +15
+
+Double Reward:
+    Easy   = +10 extra
+    Medium = +12 extra
+    Hard   = +15 extra
+
+IMPORTANT
+------------------------------------------------------------
+Double Reward is NOT granted by the client.
+
+The server must:
+1. Verify the game session
+2. Verify it belongs to the user
+3. Verify it is completed
+4. Verify the base reward from the database
+5. Verify the AdsGram reward separately
+6. Prevent the same game from being doubled twice
+7. Add the extra reward transactionally
 
 SECURITY
 ------------------------------------------------------------
@@ -41,10 +65,9 @@ SECURITY
 - Server generates completion token
 - Duplicate completion blocked
 - Balance updates are transactional
-- Client cannot request 2x reward
-- Ads are NOT trusted from the client
-- Double reward will be handled separately
-  through verified ad logic
+- Client cannot request arbitrary reward
+- Client cannot request multiplier
+- Client cannot choose double reward amount
 ============================================================
 */
 
@@ -119,6 +142,26 @@ function isValidDifficulty(difficulty) {
 
 /*
 ============================================================
+UUID VALIDATION
+============================================================
+*/
+
+function isValidUUID(value) {
+
+    if (
+        typeof value !== "string"
+    ) {
+        return false;
+    }
+
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(value);
+
+}
+
+
+/*
+============================================================
 GENERATE COMPLETION TOKEN
 ============================================================
 */
@@ -152,7 +195,9 @@ DATE HELPERS
 function calculateNextLifeAt(lastLifeAt) {
 
     if (!lastLifeAt) {
+
         return null;
+
     }
 
     return new Date(
@@ -166,7 +211,9 @@ function calculateNextLifeAt(lastLifeAt) {
 function calculateSecondsUntil(date) {
 
     if (!date) {
+
         return null;
+
     }
 
     const milliseconds =
@@ -186,31 +233,6 @@ function calculateSecondsUntil(date) {
 /*
 ============================================================
 RECOVER LIVES
-============================================================
-
-Rules:
-
-5 lives
-↓
-start game
-↓
-4 lives
-↓
-60 minutes
-↓
-5 lives
-
-If several hours pass:
-
-1 life
-↓
-3 hours later
-↓
-4 lives
-↓
-remaining cooldown preserved
-
-The server is always authoritative.
 ============================================================
 */
 
@@ -336,12 +358,6 @@ export async function recoverLives(
     }
 
 
-    /*
-    --------------------------------------------------------
-    PARSE TIMESTAMP
-    --------------------------------------------------------
-    */
-
     const lastLifeAt =
         new Date(
             user.last_life_at
@@ -451,12 +467,6 @@ export async function recoverLives(
         );
 
 
-    /*
-    --------------------------------------------------------
-    NOTHING RECOVERED
-    --------------------------------------------------------
-    */
-
     if (recoveredLives <= 0) {
 
         const nextLifeAt =
@@ -538,18 +548,6 @@ export async function recoverLives(
     /*
     --------------------------------------------------------
     PRESERVE REMAINING TIME
-    --------------------------------------------------------
-
-    Example:
-
-    last_life_at = 2h20m ago
-
-    recovered = 2
-
-    remaining = 20 minutes
-
-    We move the original timestamp forward
-    by exactly 2 hours.
     --------------------------------------------------------
     */
 
@@ -641,7 +639,7 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        LOCK USER + RECOVER LIVES
+        RECOVER LIVES
         ----------------------------------------------------
         */
 
@@ -654,48 +652,7 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        NO LIVES
-        ----------------------------------------------------
-        */
-
-        if (lifeState.lives <= 0) {
-
-            await client.query(
-                "COMMIT"
-            );
-
-
-            return {
-
-                success: false,
-
-                error: "NO_LIVES",
-
-                message:
-                    "No lives available. Please wait for the next life.",
-
-                lives: 0,
-
-                maxLives:
-                    MAX_LIVES,
-
-                nextLifeAt:
-                    lifeState.nextLifeAt,
-
-                secondsUntilNextLife:
-                    lifeState.secondsUntilNextLife,
-
-                lifeCooldownMinutes:
-                    LIFE_COOLDOWN_MINUTES
-
-            };
-
-        }
-
-
-        /*
-        ----------------------------------------------------
-        GET CURRENT LEVEL + GAME COUNT
+        GET USER PROGRESS
         ----------------------------------------------------
         */
 
@@ -734,7 +691,47 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        SELECT DIFFICULTY PROGRESS
+        NO LIVES
+        ----------------------------------------------------
+        */
+
+        if (lifeState.lives <= 0) {
+
+            await client.query(
+                "COMMIT"
+            );
+
+
+            return {
+
+                success: false,
+
+                error: "NO_LIVES",
+
+                message:
+                    "No lives available. Please wait for the next life.",
+
+                lives: 0,
+
+                maxLives: MAX_LIVES,
+
+                nextLifeAt:
+                    lifeState.nextLifeAt,
+
+                secondsUntilNextLife:
+                    lifeState.secondsUntilNextLife,
+
+                lifeCooldownMinutes:
+                    LIFE_COOLDOWN_MINUTES
+
+            };
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        GET DIFFICULTY PROGRESS
         ----------------------------------------------------
         */
 
@@ -803,12 +800,6 @@ export async function startGame(
         ----------------------------------------------------
         100 GAME LIMIT
         ----------------------------------------------------
-
-        Each difficulty has exactly 100 games.
-
-        Once 100 games are completed, that difficulty
-        cannot be started again.
-        ----------------------------------------------------
         */
 
         if (
@@ -846,7 +837,7 @@ export async function startGame(
 
                 lives:
                     Number(
-                        user.lives
+                        lifeState.lives
                     ),
 
                 maxLives:
@@ -877,13 +868,6 @@ export async function startGame(
         ----------------------------------------------------
         CONSUME ONE LIFE
         ----------------------------------------------------
-
-        If 5 → 4:
-            start timer.
-
-        If 4 → 3:
-            preserve existing timer.
-        ----------------------------------------------------
         */
 
         const updatedUser =
@@ -897,12 +881,9 @@ export async function startGame(
 
                     last_life_at =
                         CASE
-
                             WHEN lives = $1
                             THEN NOW()
-
                             ELSE last_life_at
-
                         END,
 
                     updated_at = NOW()
@@ -1008,12 +989,6 @@ export async function startGame(
         );
 
 
-        /*
-        ----------------------------------------------------
-        NEXT LIFE
-        ----------------------------------------------------
-        */
-
         const nextLifeAt =
             updated.last_life_at
                 ? calculateNextLifeAt(
@@ -1027,12 +1002,6 @@ export async function startGame(
                 nextLifeAt
             );
 
-
-        /*
-        ----------------------------------------------------
-        RETURN GAME
-        ----------------------------------------------------
-        */
 
         return {
 
@@ -1107,11 +1076,7 @@ export async function startGame(
                 "ROLLBACK"
             );
 
-        }
-
-        catch {
-            // Ignore rollback error.
-        }
+        } catch {}
 
         throw error;
 
@@ -1131,19 +1096,13 @@ export async function startGame(
 COMPLETE GAME
 ============================================================
 
-IMPORTANT:
+Normal completion only.
 
-The client cannot request:
-
-doubleReward
-multiplier
-extraCoins
-rewardAmount
-
-The normal reward ALWAYS comes from the
-server-created game session.
-
-Ads / double reward are handled separately.
+This function NEVER accepts:
+- doubleReward
+- multiplier
+- extraCoins
+- rewardAmount
 ============================================================
 */
 
@@ -1160,6 +1119,15 @@ export async function completeGame({
     durationSeconds
 
 }) {
+
+    if (!isValidUUID(gameId)) {
+
+        throw new Error(
+            "Invalid game ID"
+        );
+
+    }
+
 
     const client =
         await pool.connect();
@@ -1228,8 +1196,7 @@ export async function completeGame({
         */
 
         if (
-            session.status ===
-            "completed"
+            session.status === "completed"
         ) {
 
             await client.query(
@@ -1254,13 +1221,12 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        VERIFY SESSION STATUS
+        VERIFY STATUS
         ----------------------------------------------------
         */
 
         if (
-            session.status !==
-            "started"
+            session.status !== "started"
         ) {
 
             throw new Error(
@@ -1285,21 +1251,6 @@ export async function completeGame({
 
             throw new Error(
                 "Invalid completion token"
-            );
-
-        }
-
-
-        /*
-        ----------------------------------------------------
-        VALIDATE GAME ID
-        ----------------------------------------------------
-        */
-
-        if (!gameId) {
-
-            throw new Error(
-                "Invalid game ID"
             );
 
         }
@@ -1371,15 +1322,9 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        VERIFY REWARD FROM DATABASE
+        VERIFY SERVER REWARD
         ----------------------------------------------------
         */
-
-        const reward =
-            Number(
-                session.reward_coins
-            );
-
 
         const config =
             GAME_CONFIG[
@@ -1396,15 +1341,11 @@ export async function completeGame({
         }
 
 
-        /*
-        IMPORTANT:
+        const reward =
+            Number(
+                session.reward_coins
+            );
 
-        Reward must match the server configuration.
-
-        This protects the database if a game session
-        somehow contains an invalid reward.
-        ----------------------------------------------------
-        */
 
         if (
             reward !==
@@ -1492,12 +1433,6 @@ export async function completeGame({
             );
 
 
-        /*
-        ----------------------------------------------------
-        PROTECT BALANCE
-        ----------------------------------------------------
-        */
-
         if (
             !Number.isSafeInteger(
                 balanceBefore
@@ -1514,7 +1449,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        VERIFY DIFFICULTY PROGRESS
+        CURRENT DIFFICULTY PROGRESS
         ----------------------------------------------------
         */
 
@@ -1522,8 +1457,7 @@ export async function completeGame({
 
 
         if (
-            session.difficulty ===
-            "easy"
+            session.difficulty === "easy"
         ) {
 
             currentCompletedGames =
@@ -1534,8 +1468,7 @@ export async function completeGame({
         }
 
         else if (
-            session.difficulty ===
-            "medium"
+            session.difficulty === "medium"
         ) {
 
             currentCompletedGames =
@@ -1569,12 +1502,6 @@ export async function completeGame({
         }
 
 
-        /*
-        ----------------------------------------------------
-        PREVENT COMPLETING MORE THAN 100
-        ----------------------------------------------------
-        */
-
         if (
             currentCompletedGames >=
             config.maxGames
@@ -1599,17 +1526,14 @@ export async function completeGame({
                 UPDATE game_sessions
 
                 SET
-
                     status = 'completed',
-
                     completed_at = NOW(),
-
                     moves = $1,
-
                     duration_seconds = $2
 
                 WHERE
                     id = $3
+                    AND user_id = $4
                     AND status = 'started'
 
                 RETURNING id
@@ -1617,7 +1541,8 @@ export async function completeGame({
                 [
                     safeMoves,
                     safeDuration,
-                    gameId
+                    gameId,
+                    userId
                 ]
             );
 
@@ -1633,7 +1558,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        UPDATE USER BALANCE + PROGRESS
+        UPDATE USER BALANCE
         ----------------------------------------------------
         */
 
@@ -1655,80 +1580,62 @@ export async function completeGame({
 
                     easy_games =
                         CASE
-
                             WHEN $2 = 'easy'
                             THEN LEAST(
                                 100,
                                 easy_games + 1
                             )
-
                             ELSE easy_games
-
                         END,
 
                     medium_games =
                         CASE
-
                             WHEN $2 = 'medium'
                             THEN LEAST(
                                 100,
                                 medium_games + 1
                             )
-
                             ELSE medium_games
-
                         END,
 
                     hard_games =
                         CASE
-
                             WHEN $2 = 'hard'
                             THEN LEAST(
                                 100,
                                 hard_games + 1
                             )
-
                             ELSE hard_games
-
                         END,
 
                     easy_level =
                         CASE
-
                             WHEN $2 = 'easy'
                             THEN LEAST(
                                 100,
                                 easy_level + 1
                             )
-
                             ELSE easy_level
-
                         END,
 
                     medium_level =
                         CASE
-
                             WHEN $2 = 'medium'
                             THEN LEAST(
                                 100,
                                 medium_level + 1
                             )
-
                             ELSE medium_level
-
                         END,
 
                     hard_level =
                         CASE
-
                             WHEN $2 = 'hard'
                             THEN LEAST(
                                 100,
                                 hard_level + 1
                             )
-
                             ELSE hard_level
-
                         END,
 
                     updated_at = NOW()
@@ -1866,12 +1773,6 @@ export async function completeGame({
         );
 
 
-        /*
-        ----------------------------------------------------
-        RETURN RESULT
-        ----------------------------------------------------
-        */
-
         return {
 
             success: true,
@@ -1881,22 +1782,14 @@ export async function completeGame({
             baseReward:
                 reward,
 
-            /*
-            The normal game completion is always x1.
-
-            Client cannot change this value.
-            */
             multiplier: 1,
 
             doubleReward: false,
 
-            /*
-            This only tells the frontend that a
-            separate verified ad reward may be offered.
-
-            It does NOT grant anything.
-            */
             doubleRewardAvailable: true,
+
+            gameSessionId:
+                gameId,
 
             difficulty:
                 session.difficulty,
@@ -1956,11 +1849,7 @@ export async function completeGame({
                 "ROLLBACK"
             );
 
-        }
-
-        catch {
-            // Ignore rollback error.
-        }
+        } catch {}
 
         throw error;
 
@@ -1971,6 +1860,475 @@ export async function completeGame({
         client.release();
 
     }
+
+}
+
+
+/*
+============================================================
+CHECK DOUBLE REWARD STATUS
+============================================================
+
+Returns whether this completed game has already received
+a Double Reward.
+
+We use coin_transactions.reference_id so we do NOT need
+to add another database column.
+
+A game can have only one successful double reward.
+============================================================
+*/
+
+export async function getDoubleRewardStatus(
+    userId,
+    gameId
+) {
+
+    if (!isValidUUID(gameId)) {
+
+        throw new Error(
+            "Invalid game ID"
+        );
+
+    }
+
+
+    const result =
+        await pool.query(
+            `
+            SELECT
+                id,
+                difficulty,
+                reward_coins,
+                status
+            FROM game_sessions
+            WHERE
+                id = $1
+                AND user_id = $2
+            LIMIT 1
+            `,
+            [
+                gameId,
+                userId
+            ]
+        );
+
+
+    if (result.rowCount === 0) {
+
+        throw new Error(
+            "Game session not found"
+        );
+
+    }
+
+
+    const session =
+        result.rows[0];
+
+
+    const doubleResult =
+        await pool.query(
+            `
+            SELECT id
+            FROM coin_transactions
+            WHERE
+                user_id = $1
+                AND reference_id = $2
+                AND type = 'double_game_reward'
+            LIMIT 1
+            `,
+            [
+                userId,
+                gameId
+            ]
+        );
+
+
+    return {
+
+        success: true,
+
+        gameSessionId:
+            gameId,
+
+        completed:
+            session.status === "completed",
+
+        doubleRewarded:
+            doubleResult.rowCount > 0,
+
+        baseReward:
+            Number(
+                session.reward_coins
+            ),
+
+        difficulty:
+            session.difficulty
+
+    };
+
+}
+
+
+/*
+============================================================
+APPLY DOUBLE REWARD
+============================================================
+
+This function is intended to be called AFTER:
+
+1. AdsGram reward has been verified
+2. The verified ad reward has been consumed
+3. The game session has been validated
+
+The function itself is still transactional and checks
+again that the same game has not already received the
+Double Reward.
+
+IMPORTANT:
+The client never supplies the reward amount.
+============================================================
+*/
+
+export async function applyDoubleReward(
+    client,
+    userId,
+    gameId
+) {
+
+    if (!isValidUUID(gameId)) {
+
+        throw new Error(
+            "Invalid game ID"
+        );
+
+    }
+
+
+    /*
+    --------------------------------------------------------
+    LOCK GAME SESSION
+    --------------------------------------------------------
+    */
+
+    const sessionResult =
+        await client.query(
+            `
+            SELECT
+                id,
+                user_id,
+                difficulty,
+                reward_coins,
+                status
+            FROM game_sessions
+            WHERE
+                id = $1
+                AND user_id = $2
+            FOR UPDATE
+            `,
+            [
+                gameId,
+                userId
+            ]
+        );
+
+
+    if (sessionResult.rowCount === 0) {
+
+        throw new Error(
+            "Game session not found"
+        );
+
+    }
+
+
+    const session =
+        sessionResult.rows[0];
+
+
+    /*
+    --------------------------------------------------------
+    GAME MUST BE COMPLETED
+    --------------------------------------------------------
+    */
+
+    if (
+        session.status !== "completed"
+    ) {
+
+        throw new Error(
+            "Game session is not completed"
+        );
+
+    }
+
+
+    /*
+    --------------------------------------------------------
+    VERIFY SERVER REWARD
+    --------------------------------------------------------
+    */
+
+    const config =
+        GAME_CONFIG[
+            session.difficulty
+        ];
+
+
+    if (!config) {
+
+        throw new Error(
+            "Invalid game difficulty"
+        );
+
+    }
+
+
+    const extraReward =
+        Number(
+            session.reward_coins
+        );
+
+
+    if (
+        extraReward !==
+        config.reward
+    ) {
+
+        throw new Error(
+            "Invalid game reward"
+        );
+
+    }
+
+
+    /*
+    --------------------------------------------------------
+    CHECK WHETHER DOUBLE REWARD WAS ALREADY GIVEN
+    --------------------------------------------------------
+
+    The game session is locked above.
+
+    Therefore two simultaneous requests for the same game
+    cannot both pass this check.
+    --------------------------------------------------------
+    */
+
+    const existingResult =
+        await client.query(
+            `
+            SELECT id
+            FROM coin_transactions
+            WHERE
+                user_id = $1
+                AND reference_id = $2
+                AND type = 'double_game_reward'
+            LIMIT 1
+            `,
+            [
+                userId,
+                gameId
+            ]
+        );
+
+
+    if (existingResult.rowCount > 0) {
+
+        return {
+
+            success: false,
+
+            error:
+                "DOUBLE_REWARD_ALREADY_CLAIMED",
+
+            message:
+                "Double Reward has already been claimed for this game.",
+
+            gameSessionId:
+                gameId,
+
+            doubleReward:
+                false
+
+        };
+
+    }
+
+
+    /*
+    --------------------------------------------------------
+    LOCK USER
+    --------------------------------------------------------
+    */
+
+    const userResult =
+        await client.query(
+            `
+            SELECT
+                coins,
+                today_coins
+            FROM users
+            WHERE id = $1
+            FOR UPDATE
+            `,
+            [userId]
+        );
+
+
+    if (userResult.rowCount === 0) {
+
+        throw new Error(
+            "User not found"
+        );
+
+    }
+
+
+    const user =
+        userResult.rows[0];
+
+
+    const balanceBefore =
+        Number(
+            user.coins
+        );
+
+
+    if (
+        !Number.isSafeInteger(
+            balanceBefore
+        ) ||
+        balanceBefore < 0
+    ) {
+
+        throw new Error(
+            "Invalid user balance"
+        );
+
+    }
+
+
+    /*
+    --------------------------------------------------------
+    ADD EXTRA REWARD
+    --------------------------------------------------------
+    */
+
+    const updateResult =
+        await client.query(
+            `
+            UPDATE users
+            SET
+                coins = coins + $1,
+                today_coins = today_coins + $1,
+                updated_at = NOW()
+            WHERE id = $2
+            RETURNING
+                coins,
+                today_coins
+            `,
+            [
+                extraReward,
+                userId
+            ]
+        );
+
+
+    if (updateResult.rowCount === 0) {
+
+        throw new Error(
+            "Unable to update user balance"
+        );
+
+    }
+
+
+    const updatedUser =
+        updateResult.rows[0];
+
+
+    const balanceAfter =
+        Number(
+            updatedUser.coins
+        );
+
+
+    /*
+    --------------------------------------------------------
+    RECORD DOUBLE REWARD TRANSACTION
+    --------------------------------------------------------
+    */
+
+    await client.query(
+        `
+        INSERT INTO coin_transactions
+        (
+            user_id,
+            type,
+            amount,
+            balance_before,
+            balance_after,
+            reference_id,
+            description,
+            created_at
+        )
+
+        VALUES
+        (
+            $1,
+            'double_game_reward',
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            NOW()
+        )
+        `,
+        [
+            userId,
+            extraReward,
+            balanceBefore,
+            balanceAfter,
+            gameId,
+            `Double Reward for ${session.difficulty} memory game`
+        ]
+    );
+
+
+    return {
+
+        success: true,
+
+        gameSessionId:
+            gameId,
+
+        difficulty:
+            session.difficulty,
+
+        baseReward:
+            extraReward,
+
+        extraReward,
+
+        totalReward:
+            extraReward * 2,
+
+        doubleReward:
+            true,
+
+        multiplier: 2,
+
+        balance:
+            balanceAfter,
+
+        todayCoins:
+            Number(
+                updatedUser.today_coins
+            )
+
+    };
 
 }
 
@@ -2055,12 +2413,6 @@ export async function getGameStatus(
         );
 
 
-        /*
-        ----------------------------------------------------
-        RETURN STATUS
-        ----------------------------------------------------
-        */
-
         return {
 
             success: true,
@@ -2118,12 +2470,6 @@ export async function getGameStatus(
 
             },
 
-            /*
-            ------------------------------------------------
-            LIFE INFORMATION
-            ------------------------------------------------
-            */
-
             lives:
                 Number(
                     lifeState.lives
@@ -2143,12 +2489,6 @@ export async function getGameStatus(
 
             lifeCooldownSeconds:
                 LIFE_COOLDOWN_SECONDS,
-
-            /*
-            ------------------------------------------------
-            DIFFICULTY LIMITS
-            ------------------------------------------------
-            */
 
             maxGames: {
 
@@ -2175,11 +2515,7 @@ export async function getGameStatus(
                 "ROLLBACK"
             );
 
-        }
-
-        catch {
-            // Ignore rollback error.
-        }
+        } catch {}
 
         throw error;
 
