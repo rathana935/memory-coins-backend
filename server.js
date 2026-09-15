@@ -5,27 +5,31 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
-import pool from "./db/pool.js";
+import { pool } from "./db/pool.js";
 
-import authRoutes from "./routes/auth.js";
-import gameRoutes from "./routes/game.js";
-import rewardsRoutes from "./routes/rewards.js";
-import leaderboardRoutes from "./routes/leaderboard.js";
-import withdrawalRoutes from "./routes/withdrawals.js";
-import referralRoutes from "./routes/referrals.js";
+import authRouter from "./routes/auth.js";
+import gameRouter from "./routes/game.js";
+import rewardsRouter from "./routes/rewards.js";
+import leaderboardRouter from "./routes/leaderboard.js";
+import referralsRouter from "./routes/referrals.js";
+import withdrawalsRouter from "./routes/withdrawals.js";
 
 import {
     confirmAdsgramReward
 } from "./services/rewards.js";
 
-import { requireAuth } from "./middleware/auth.js";
+
+/* =========================================================
+   APP
+========================================================= */
 
 const app = express();
 
-const PORT = Number(process.env.PORT || 3000);
+const PORT =
+    Number(process.env.PORT || 10000);
 
 const NODE_ENV =
-    process.env.NODE_ENV || "development";
+    process.env.NODE_ENV || "production";
 
 
 /* =========================================================
@@ -49,102 +53,13 @@ app.use(
 );
 
 
-/* =========================================================
-   CORS
-========================================================= */
-
-const allowedOrigins = [
-    "https://rathana935.github.io",
-    "https://web.telegram.org",
-    "https://webk.telegram.org"
-];
-
-if (process.env.FRONTEND_URL) {
-    allowedOrigins.push(
-        process.env.FRONTEND_URL
-    );
-}
-
 app.use(
     cors({
-        origin(origin, callback) {
-
-            /*
-             * Requests without Origin are allowed.
-             *
-             * Useful for:
-             * - server-to-server requests
-             * - AdsGram Reward URL
-             * - health checks
-             */
-
-            if (!origin) {
-                return callback(null, true);
-            }
-
-            /*
-             * Development:
-             * allow all origins.
-             */
-
-            if (NODE_ENV !== "production") {
-                return callback(null, true);
-            }
-
-            /*
-             * Explicitly allowed origins.
-             */
-
-            if (
-                allowedOrigins.includes(origin)
-            ) {
-                return callback(null, true);
-            }
-
-            /*
-             * Telegram WebApp origins.
-             */
-
-            if (
-                origin.startsWith(
-                    "https://web.telegram.org"
-                ) ||
-                origin.startsWith(
-                    "https://webk.telegram.org"
-                )
-            ) {
-                return callback(null, true);
-            }
-
-            return callback(
-                new Error(
-                    "CORS: Origin not allowed"
-                )
-            );
-        },
-
-        credentials: true,
-
-        methods: [
-            "GET",
-            "POST",
-            "PUT",
-            "PATCH",
-            "DELETE",
-            "OPTIONS"
-        ],
-
-        allowedHeaders: [
-            "Content-Type",
-            "Authorization"
-        ]
+        origin: true,
+        credentials: false
     })
 );
 
-
-/* =========================================================
-   BODY PARSING
-========================================================= */
 
 app.use(
     express.json({
@@ -152,283 +67,146 @@ app.use(
     })
 );
 
+
 app.use(
     express.urlencoded({
-        extended: true,
+        extended: false,
         limit: "100kb"
     })
 );
 
 
 /* =========================================================
-   GLOBAL RATE LIMIT
+   RATE LIMITERS
 ========================================================= */
 
-const globalLimiter =
+const generalLimiter =
     rateLimit({
         windowMs: 60 * 1000,
-
-        limit: 100,
-
-        standardHeaders: "draft-7",
-
+        max: 120,
+        standardHeaders: true,
         legacyHeaders: false,
-
         message: {
             success: false,
-            error:
-                "Too many requests. Please try again later."
+            message: "Too many requests. Please try again later."
         }
     });
 
-app.use(
-    globalLimiter
-);
-
-
-/* =========================================================
-   AUTH RATE LIMIT
-========================================================= */
 
 const authLimiter =
     rateLimit({
-        windowMs: 60 * 1000,
-
-        limit: 20,
-
-        standardHeaders: "draft-7",
-
+        windowMs: 15 * 60 * 1000,
+        max: 30,
+        standardHeaders: true,
         legacyHeaders: false,
-
         message: {
             success: false,
-            error:
-                "Too many authentication requests."
+            message: "Too many authentication requests."
         }
     });
 
-
-/* =========================================================
-   GAME RATE LIMIT
-========================================================= */
-
-const gameLimiter =
-    rateLimit({
-        windowMs: 60 * 1000,
-
-        limit: 60,
-
-        standardHeaders: "draft-7",
-
-        legacyHeaders: false,
-
-        message: {
-            success: false,
-            error:
-                "Too many game requests."
-        }
-    });
-
-
-/* =========================================================
-   REWARDS RATE LIMIT
-========================================================= */
-
-const rewardsLimiter =
-    rateLimit({
-        windowMs: 60 * 1000,
-
-        limit: 30,
-
-        standardHeaders: "draft-7",
-
-        legacyHeaders: false,
-
-        message: {
-            success: false,
-            error:
-                "Too many reward requests."
-        }
-    });
-
-
-/* =========================================================
-   ADSGRAM CALLBACK RATE LIMIT
-========================================================= */
 
 const adsgramLimiter =
     rateLimit({
         windowMs: 60 * 1000,
-
-        limit: 30,
-
-        standardHeaders: "draft-7",
-
+        max: 60,
+        standardHeaders: true,
         legacyHeaders: false,
-
         message: {
             success: false,
-            error:
-                "Too many AdsGram callback requests."
+            message: "Too many ad reward requests."
         }
     });
 
 
-/* =========================================================
-   LEADERBOARD RATE LIMIT
-========================================================= */
-
-const leaderboardLimiter =
-    rateLimit({
-        windowMs: 60 * 1000,
-
-        limit: 60,
-
-        standardHeaders: "draft-7",
-
-        legacyHeaders: false,
-
-        message: {
-            success: false,
-            error:
-                "Too many leaderboard requests."
-        }
-    });
-
-
-/* =========================================================
-   WITHDRAWAL RATE LIMIT
-========================================================= */
-
-const withdrawalLimiter =
-    rateLimit({
-        windowMs: 60 * 1000,
-
-        limit: 10,
-
-        standardHeaders: "draft-7",
-
-        legacyHeaders: false,
-
-        message: {
-            success: false,
-            error:
-                "Too many withdrawal requests. Please try again later."
-        }
-    });
-
-
-/* =========================================================
-   REFERRAL RATE LIMIT
-========================================================= */
-
-const referralLimiter =
-    rateLimit({
-        windowMs: 60 * 1000,
-
-        limit: 30,
-
-        standardHeaders: "draft-7",
-
-        legacyHeaders: false,
-
-        message: {
-            success: false,
-            error:
-                "Too many referral requests. Please try again later."
-        }
-    });
-
-
-/* =========================================================
-   HEALTH CHECK
-========================================================= */
-
-app.get(
-    "/health",
-    async (req, res) => {
-
-        try {
-
-            await pool.query(
-                "SELECT 1"
-            );
-
-            return res.json({
-                success: true,
-
-                status: "ok",
-
-                database: "connected",
-
-                environment: NODE_ENV,
-
-                timestamp:
-                    new Date().toISOString()
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Health check database error:",
-                error
-            );
-
-            return res.status(503).json({
-                success: false,
-
-                status: "error",
-
-                database: "disconnected"
-            });
-        }
-    }
+app.use(
+    generalLimiter
 );
 
 
 /* =========================================================
-   ROOT
+   BASIC ROUTES
 ========================================================= */
 
 app.get(
     "/",
     (req, res) => {
 
-        return res.json({
+        res.json({
             success: true,
-
-            name:
-                "Memory Card API",
-
-            version:
-                "1.0.0",
-
-            status:
-                "online"
+            name: "Memory Card Backend",
+            environment: NODE_ENV,
+            status: "running",
+            endpoints: {
+                health: "/health",
+                auth: "/api/auth",
+                game: "/api/game",
+                rewards: "/api/rewards",
+                leaderboard: "/api/leaderboard",
+                referrals: "/api/referrals",
+                withdrawals: "/api/withdrawals",
+                adsgramReward: "/api/adsgram/reward"
+            }
         });
+
+    }
+);
+
+
+app.get(
+    "/health",
+    async (req, res) => {
+
+        try{
+
+            await pool.query(
+                "SELECT 1"
+            );
+
+            res.json({
+                success: true,
+                status: "ok",
+                database: "connected",
+                environment: NODE_ENV,
+                timestamp: new Date().toISOString()
+            });
+
+        }catch(error){
+
+            console.error(
+                "Health check database error:",
+                error
+            );
+
+            res.status(503).json({
+                success: false,
+                status: "error",
+                database: "disconnected",
+                environment: NODE_ENV,
+                timestamp: new Date().toISOString()
+            });
+
+        }
+
     }
 );
 
 
 /* =========================================================
-   ADSGRAM REWARD CALLBACK
+   ADSGRAM REWARD URL
 =========================================================
 
-   IMPORTANT:
+   AdsGram Reward URL:
 
-   This endpoint is PUBLIC.
-
-   Do NOT add requireAuth.
-
-   AdsGram calls this endpoint directly.
-
-   Example:
-
-   GET /api/adsgram/reward?userid=123456789
+   https://memory-coins-backend.onrender.com/api/adsgram/reward?userid=[userId]
 
    Optional:
+   ?userid=[userId]&ad_type=life
 
-   GET /api/adsgram/reward?userid=123456789&adType=life
+   Supported:
+   life
+   double_reward
+   lucky_roll
 
 ========================================================= */
 
@@ -437,177 +215,209 @@ app.get(
     adsgramLimiter,
     async (req, res) => {
 
-        try {
+        try{
+
+            /*
+             * AdsGram sends Telegram user ID.
+             *
+             * Accept both:
+             * userid
+             * user_id
+             */
 
             const telegramId =
-                req.query?.userid ??
-                req.query?.user_id ??
-                null;
-
-            const requestedAdType =
-                req.query?.adType ??
-                req.query?.ad_type ??
-                null;
-
-            const allowedAdTypes =
-                new Set([
-                    "life",
-                    "double_reward",
-                    "lucky_roll"
-                ]);
-
-            let adType = null;
-
-            if (requestedAdType) {
-
-                const normalized =
-                    String(
-                        requestedAdType
-                    ).trim();
-
-                if (
-                    !allowedAdTypes.has(
-                        normalized
-                    )
-                ) {
-
-                    return res.status(400).json({
-                        success: false,
-
-                        error:
-                            "INVALID_AD_TYPE"
-                    });
-                }
-
-                adType = normalized;
-            }
-
-            if (
-                telegramId === null ||
-                telegramId === undefined ||
                 String(
-                    telegramId
-                ).trim() === ""
-            ) {
+                    req.query.userid ||
+                    req.query.user_id ||
+                    ""
+                ).trim();
+
+
+            if(!telegramId){
 
                 return res.status(400).json({
                     success: false,
-
-                    error:
-                        "MISSING_USER_ID"
+                    message: "Missing userid."
                 });
+
             }
 
+
             /*
-             * Important:
-             *
-             * confirmAdsgramReward()
-             * does NOT directly give coins.
-             *
-             * It confirms a server-created
-             * pending ad reward intent.
+             * Do not allow arbitrary ad types.
              */
 
-            const result =
-                await confirmAdsgramReward(
-                    telegramId,
-                    adType
-                );
+            const requestedAdType =
+                String(
+                    req.query.ad_type ||
+                    req.query.adType ||
+                    "life"
+                ).trim();
 
-            return res
-                .status(
-                    result.success
-                        ? 200
-                        : 404
+
+            const allowedTypes = [
+                "life",
+                "double_reward",
+                "lucky_roll"
+            ];
+
+
+            if(
+                !allowedTypes.includes(
+                    requestedAdType
                 )
-                .json(result);
+            ){
 
-        } catch (error) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid ad type."
+                });
+
+            }
+
+
+            /*
+             * IMPORTANT:
+             *
+             * The Reward URL itself does not tell us
+             * which frontend intent this ad belongs to.
+             *
+             * The rewards service therefore matches the
+             * Telegram user to the most recent pending
+             * intent for this ad type.
+             *
+             * The reward is NOT directly added here.
+             */
+
+            const reward =
+                await confirmAdsgramReward({
+                    telegramId,
+                    adType: requestedAdType
+                });
+
+
+            return res.json({
+
+                success: true,
+
+                message:
+                    "AdsGram reward received.",
+
+                reward: {
+                    id:
+                        reward.id,
+
+                    adType:
+                        reward.adType,
+
+                    status:
+                        reward.status
+                }
+
+            });
+
+        }catch(error){
 
             console.error(
                 "AdsGram Reward URL error:",
                 error
             );
 
+
+            /*
+             * Always return a controlled response.
+             *
+             * Never expose stack traces or SQL details.
+             */
+
+            if(
+                error.code ===
+                "USER_NOT_FOUND"
+            ){
+
+                return res.status(404).json({
+                    success: false,
+                    message: "Telegram user not found."
+                });
+
+            }
+
+
+            if(
+                error.code ===
+                "NO_PENDING_AD"
+            ){
+
+                return res.status(409).json({
+                    success: false,
+                    message: "No pending ad reward."
+                });
+
+            }
+
+
+            if(
+                error.code ===
+                "INVALID_AD_TYPE"
+            ){
+
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid ad type."
+                });
+
+            }
+
+
             return res.status(500).json({
                 success: false,
-
-                error:
-                    "AdsGram callback failed."
+                message: "Unable to process ad reward."
             });
+
         }
+
     }
 );
 
 
 /* =========================================================
-   AUTH ROUTES
+   API ROUTES
 ========================================================= */
 
 app.use(
     "/api/auth",
     authLimiter,
-    authRoutes
+    authRouter
 );
 
-
-/* =========================================================
-   GAME ROUTES
-========================================================= */
 
 app.use(
     "/api/game",
-    gameLimiter,
-    requireAuth,
-    gameRoutes
+    gameRouter
 );
 
-
-/* =========================================================
-   REWARD ROUTES
-========================================================= */
 
 app.use(
     "/api/rewards",
-    rewardsLimiter,
-    requireAuth,
-    rewardsRoutes
+    rewardsRouter
 );
 
-
-/* =========================================================
-   LEADERBOARD ROUTES
-========================================================= */
 
 app.use(
     "/api/leaderboard",
-    leaderboardLimiter,
-    requireAuth,
-    leaderboardRoutes
+    leaderboardRouter
 );
 
-
-/* =========================================================
-   WITHDRAWAL ROUTES
-========================================================= */
-
-app.use(
-    "/api/withdrawals",
-    withdrawalLimiter,
-    requireAuth,
-    withdrawalRoutes
-);
-
-
-/* =========================================================
-   REFERRAL ROUTES
-========================================================= */
 
 app.use(
     "/api/referrals",
-    referralLimiter,
-    requireAuth,
-    referralRoutes
+    referralsRouter
+);
+
+
+app.use(
+    "/api/withdrawals",
+    withdrawalsRouter
 );
 
 
@@ -618,56 +428,52 @@ app.use(
 app.use(
     (req, res) => {
 
-        return res.status(404).json({
+        res.status(404).json({
             success: false,
-
-            error:
-                "Route not found.",
-
-            path:
-                req.originalUrl
+            message: "Route not found."
         });
+
     }
 );
 
 
 /* =========================================================
-   GLOBAL ERROR HANDLER
+   ERROR HANDLER
 ========================================================= */
 
 app.use(
-    (
-        error,
-        req,
-        res,
-        next
-    ) => {
+    (error, req, res, next) => {
 
         console.error(
             "Unhandled server error:",
             error
         );
 
-        if (
-            error.message?.startsWith(
-                "CORS:"
-            )
-        ) {
 
-            return res.status(403).json({
-                success: false,
+        if(res.headersSent){
 
-                error:
-                    "Origin not allowed."
-            });
+            return next(error);
+
         }
 
-        return res.status(500).json({
+
+        res.status(
+            Number(error.status) || 500
+        ).json({
+
             success: false,
 
-            error:
-                "Internal server error."
+            message:
+                NODE_ENV === "production"
+                    ? (
+                        error.expose
+                            ? error.message
+                            : "Internal server error."
+                    )
+                    : error.message
+
         });
+
     }
 );
 
@@ -682,15 +488,11 @@ const server =
         () => {
 
             console.log(
-                "========================================"
+                "=========================================="
             );
 
             console.log(
                 "Memory Card Backend"
-            );
-
-            console.log(
-                "========================================"
             );
 
             console.log(
@@ -714,8 +516,9 @@ const server =
             );
 
             console.log(
-                "========================================"
+                "=========================================="
             );
+
         }
     );
 
@@ -724,16 +527,19 @@ const server =
    GRACEFUL SHUTDOWN
 ========================================================= */
 
-async function shutdown(signal) {
+async function shutdown(
+    signal
+){
 
     console.log(
         `${signal} received. Shutting down...`
     );
 
+
     server.close(
         async () => {
 
-            try {
+            try{
 
                 await pool.end();
 
@@ -741,23 +547,36 @@ async function shutdown(signal) {
                     "Database pool closed."
                 );
 
-                console.log(
-                    "Server stopped."
-                );
-
-                process.exit(0);
-
-            } catch (error) {
+            }catch(error){
 
                 console.error(
-                    "Shutdown error:",
+                    "Error closing database:",
                     error
                 );
 
-                process.exit(1);
+            }finally{
+
+                process.exit(0);
+
             }
+
         }
     );
+
+
+    setTimeout(
+        () => {
+
+            console.error(
+                "Forced shutdown."
+            );
+
+            process.exit(1);
+
+        },
+        10000
+    );
+
 }
 
 
@@ -765,6 +584,7 @@ process.on(
     "SIGTERM",
     () => shutdown("SIGTERM")
 );
+
 
 process.on(
     "SIGINT",
