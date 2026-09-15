@@ -25,21 +25,33 @@ LUCKY ROLL
     99,997 - 99,998  = +82
     99,999            = +10,000
 
+ADS
+- Provider: AdsGram
+- Server-created ad intent
+- AdsGram Reward URL confirmation
+- Confirmed rewards are consumed only once
+- Client NEVER decides whether an ad was completed
+
+AD TYPES
+- life
+- double_reward
+- lucky_roll
+
+LIFE REWARD
+- +1 life
+- Maximum 5 lives
+
+DOUBLE REWARD
+- Used for a completed game reward
+- Actual game-result integration is handled by game service
+- This service only verifies/consumes the AdsGram reward
+
 SECURITY
-- Browser NEVER chooses reward
-- Browser NEVER chooses roll number
+- Browser NEVER chooses reward amount
+- Browser NEVER chooses Lucky Roll number
+- Browser NEVER confirms an ad
 - User balance is locked with FOR UPDATE
 - Coin changes happen inside transactions
-
-IMPORTANT
----------------------------------------------------------
-The current adCompleted parameter is only a temporary
-server-side gate.
-
-It is NOT proof that an AdsGram ad was actually watched.
-
-Before production, this must be replaced with real
-server-side AdsGram reward verification.
 =========================================================
 */
 
@@ -56,12 +68,20 @@ const DEFAULT_LUCKY_MIN = 1;
 
 const DEFAULT_LUCKY_MAX = 99999;
 
+const MAX_LIVES = 5;
+
+/*
+Ads must be confirmed shortly after an intent is created.
+*/
+const AD_INTENT_TTL_SECONDS = 10 * 60;
+
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
 function getPhnomPenhDate() {
+
     return new Intl.DateTimeFormat(
         "en-CA",
         {
@@ -131,6 +151,7 @@ async function getDailyBonusAmount(client) {
 ========================================================= */
 
 function getDefaultLuckyRewards() {
+
     return {
         default: 5,
         "90000": 8,
@@ -153,7 +174,9 @@ async function getLuckyRollConfig(client) {
         "lucky_roll"
     );
 
-    const defaults = getDefaultLuckyRewards();
+    const defaults =
+        getDefaultLuckyRewards();
+
 
     const cooldownRaw =
         Number(
@@ -161,11 +184,13 @@ async function getLuckyRollConfig(client) {
             DEFAULT_LUCKY_COOLDOWN_SECONDS
         );
 
+
     const minimumRaw =
         Number(
             setting?.minimum ??
             DEFAULT_LUCKY_MIN
         );
+
 
     const maximumRaw =
         Number(
@@ -173,28 +198,25 @@ async function getLuckyRollConfig(client) {
             DEFAULT_LUCKY_MAX
         );
 
+
     const cooldownSeconds =
         Number.isSafeInteger(cooldownRaw) &&
         cooldownRaw > 0
             ? cooldownRaw
             : DEFAULT_LUCKY_COOLDOWN_SECONDS;
 
+
     let minimum =
         Number.isSafeInteger(minimumRaw)
             ? minimumRaw
             : DEFAULT_LUCKY_MIN;
+
 
     let maximum =
         Number.isSafeInteger(maximumRaw)
             ? maximumRaw
             : DEFAULT_LUCKY_MAX;
 
-
-    /*
-    ---------------------------------------------------------
-    FORCE SAFE LUCKY RANGE
-    ---------------------------------------------------------
-    */
 
     minimum = Math.max(
         DEFAULT_LUCKY_MIN,
@@ -203,6 +225,7 @@ async function getLuckyRollConfig(client) {
             minimum
         )
     );
+
 
     maximum = Math.max(
         DEFAULT_LUCKY_MIN,
@@ -213,14 +236,13 @@ async function getLuckyRollConfig(client) {
     );
 
 
-    /*
-    If configuration is reversed,
-    use the complete valid range.
-    */
-
     if (minimum > maximum) {
-        minimum = DEFAULT_LUCKY_MIN;
-        maximum = DEFAULT_LUCKY_MAX;
+
+        minimum =
+            DEFAULT_LUCKY_MIN;
+
+        maximum =
+            DEFAULT_LUCKY_MAX;
     }
 
 
@@ -252,12 +274,12 @@ function calculateLuckyReward(
     rewards
 ) {
 
-    const number = Number(
-        rollNumber
-    );
+    const number =
+        Number(rollNumber);
 
 
     if (number === 99999) {
+
         return safeReward(
             rewards?.["99999"],
             10000
@@ -266,6 +288,7 @@ function calculateLuckyReward(
 
 
     if (number >= 99997) {
+
         return safeReward(
             rewards?.["99997"],
             82
@@ -274,6 +297,7 @@ function calculateLuckyReward(
 
 
     if (number >= 99500) {
+
         return safeReward(
             rewards?.["99500"],
             18
@@ -282,6 +306,7 @@ function calculateLuckyReward(
 
 
     if (number >= 95000) {
+
         return safeReward(
             rewards?.["95000"],
             12
@@ -290,6 +315,7 @@ function calculateLuckyReward(
 
 
     if (number >= 90000) {
+
         return safeReward(
             rewards?.["90000"],
             8
@@ -305,7 +331,7 @@ function calculateLuckyReward(
 
 
 /* =========================================================
-   SAFE REWARD VALUE
+   SAFE REWARD
 ========================================================= */
 
 function safeReward(
@@ -313,7 +339,9 @@ function safeReward(
     fallback
 ) {
 
-    const number = Number(value);
+    const number =
+        Number(value);
+
 
     if (
         Number.isSafeInteger(number) &&
@@ -322,7 +350,854 @@ function safeReward(
         return number;
     }
 
+
     return fallback;
+}
+
+
+/* =========================================================
+   VALIDATE AD TYPE
+========================================================= */
+
+function validateAdType(adType) {
+
+    const allowed = new Set([
+        "life",
+        "double_reward",
+        "lucky_roll"
+    ]);
+
+
+    if (!allowed.has(adType)) {
+
+        const error =
+            new Error("INVALID_AD_TYPE");
+
+        error.code =
+            "INVALID_AD_TYPE";
+
+        throw error;
+    }
+
+
+    return adType;
+}
+
+
+/* =========================================================
+   CREATE ADSGRAM AD INTENT
+=========================================================
+
+The frontend calls this BEFORE opening AdsGram.
+
+The intent is stored on the server.
+
+The browser cannot simply send:
+    adCompleted: true
+
+and receive a reward.
+========================================================= */
+
+export async function createAdRewardIntent(
+    userId,
+    adType,
+    metadata = {}
+) {
+
+    validateAdType(adType);
+
+
+    const client =
+        await pool.connect();
+
+
+    try {
+
+        await client.query(
+            "BEGIN"
+        );
+
+
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    telegram_id,
+                    is_blocked
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [userId]
+            );
+
+
+        if (userResult.rowCount === 0) {
+
+            throw new Error(
+                "USER_NOT_FOUND"
+            );
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        if (user.is_blocked) {
+
+            throw new Error(
+                "USER_BLOCKED"
+            );
+        }
+
+
+        /*
+        Prevent many unused intents for the same ad type.
+        */
+
+        const existingResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    metadata,
+                    created_at
+                FROM ad_rewards
+                WHERE
+                    user_id = $1
+                    AND provider = 'adsgram'
+                    AND ad_type = $2
+                    AND status = 'pending'
+                    AND consumed_at IS NULL
+                    AND created_at >= NOW() -
+                        ($3 * INTERVAL '1 second')
+                ORDER BY created_at DESC
+                LIMIT 1
+                `,
+                [
+                    userId,
+                    adType,
+                    AD_INTENT_TTL_SECONDS
+                ]
+            );
+
+
+        if (existingResult.rowCount > 0) {
+
+            const existing =
+                existingResult.rows[0];
+
+
+            await client.query(
+                "COMMIT"
+            );
+
+
+            return {
+                success: true,
+                reused: true,
+                intentId:
+                    existing.id,
+                adType,
+                provider:
+                    "adsgram",
+                expiresAt:
+                    new Date(
+                        new Date(
+                            existing.created_at
+                        ).getTime() +
+                        AD_INTENT_TTL_SECONDS *
+                        1000
+                    )
+            };
+        }
+
+
+        const intentId =
+            crypto.randomUUID();
+
+
+        const safeMetadata =
+            metadata &&
+            typeof metadata === "object"
+                ? metadata
+                : {};
+
+
+        const intentMetadata = {
+            ...safeMetadata,
+            intentId,
+            createdBy:
+                "memory-card-backend",
+            createdAt:
+                new Date().toISOString()
+        };
+
+
+        await client.query(
+            `
+            INSERT INTO ad_rewards
+            (
+                id,
+                user_id,
+                provider,
+                ad_type,
+                external_reward_id,
+                reward_coins,
+                status,
+                metadata,
+                created_at
+            )
+            VALUES
+            (
+                $1,
+                $2,
+                'adsgram',
+                $3,
+                NULL,
+                0,
+                'pending',
+                $4::jsonb,
+                NOW()
+            )
+            `,
+            [
+                intentId,
+                userId,
+                adType,
+                JSON.stringify(
+                    intentMetadata
+                )
+            ]
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
+        return {
+            success: true,
+            reused: false,
+            intentId,
+            adType,
+            provider:
+                "adsgram",
+            expiresAt:
+                new Date(
+                    Date.now() +
+                    AD_INTENT_TTL_SECONDS *
+                    1000
+                )
+        };
+
+
+    } catch (error) {
+
+        try {
+            await client.query(
+                "ROLLBACK"
+            );
+        } catch {
+            // Ignore rollback errors.
+        }
+
+        throw error;
+
+    } finally {
+
+        client.release();
+    }
+}
+
+
+/* =========================================================
+   CONFIRM ADSGRAM REWARD
+=========================================================
+
+AdsGram Reward URL sends the Telegram ID.
+
+Example:
+
+GET /api/adsgram/reward?userid=123456789
+
+We then match that Telegram account to a short-lived
+server-created pending ad intent.
+
+IMPORTANT:
+The client is never allowed to call this function.
+========================================================= */
+
+export async function confirmAdsgramReward(
+    telegramId,
+    adType = null
+) {
+
+    const normalizedTelegramId =
+        String(telegramId ?? "").trim();
+
+
+    if (
+        !/^-?\d+$/.test(
+            normalizedTelegramId
+        )
+    ) {
+
+        const error =
+            new Error(
+                "INVALID_TELEGRAM_ID"
+            );
+
+        error.code =
+            "INVALID_TELEGRAM_ID";
+
+        throw error;
+    }
+
+
+    if (adType !== null) {
+        validateAdType(adType);
+    }
+
+
+    const client =
+        await pool.connect();
+
+
+    try {
+
+        await client.query(
+            "BEGIN"
+        );
+
+
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    telegram_id,
+                    is_blocked
+                FROM users
+                WHERE telegram_id = $1
+                FOR UPDATE
+                `,
+                [normalizedTelegramId]
+            );
+
+
+        if (userResult.rowCount === 0) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+            return {
+                success: false,
+                error:
+                    "USER_NOT_FOUND"
+            };
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        if (user.is_blocked) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+            return {
+                success: false,
+                error:
+                    "USER_BLOCKED"
+            };
+        }
+
+
+        const params = [
+            user.id,
+            AD_INTENT_TTL_SECONDS
+        ];
+
+
+        let typeCondition = "";
+
+
+        if (adType) {
+
+            params.push(adType);
+
+            typeCondition =
+                "AND ad_type = $3";
+        }
+
+
+        /*
+        Find the oldest still-pending intent.
+
+        We intentionally do not immediately grant coins.
+        We only mark the ad reward as confirmed.
+
+        The actual reward is consumed by a protected API.
+        */
+
+        const intentResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    ad_type,
+                    metadata,
+                    created_at
+                FROM ad_rewards
+                WHERE
+                    user_id = $1
+                    AND provider = 'adsgram'
+                    AND status = 'pending'
+                    AND consumed_at IS NULL
+                    AND created_at >= NOW() -
+                        ($2 * INTERVAL '1 second')
+                    ${typeCondition}
+                ORDER BY created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                `,
+                params
+            );
+
+
+        if (intentResult.rowCount === 0) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+            return {
+                success: false,
+                error:
+                    "NO_PENDING_AD"
+            };
+        }
+
+
+        const intent =
+            intentResult.rows[0];
+
+
+        const externalRewardId =
+            `adsgram:${normalizedTelegramId}:${intent.id}`;
+
+
+        const updatedResult =
+            await client.query(
+                `
+                UPDATE ad_rewards
+                SET
+                    status = 'confirmed',
+                    external_reward_id = $1,
+                    reward_coins = 0,
+                    confirmed_at = NOW(),
+                    metadata =
+                        metadata ||
+                        $2::jsonb
+                WHERE
+                    id = $3
+                    AND status = 'pending'
+                RETURNING
+                    id,
+                    user_id,
+                    ad_type,
+                    status,
+                    confirmed_at
+                `,
+                [
+                    externalRewardId,
+                    JSON.stringify({
+                        confirmedBy:
+                            "adsgram_reward_url",
+                        telegramId:
+                            normalizedTelegramId
+                    }),
+                    intent.id
+                ]
+            );
+
+
+        if (
+            updatedResult.rowCount === 0
+        ) {
+
+            throw new Error(
+                "AD_CONFIRMATION_FAILED"
+            );
+        }
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
+        const confirmed =
+            updatedResult.rows[0];
+
+
+        return {
+            success: true,
+            confirmed: true,
+            rewardId:
+                confirmed.id,
+            userId:
+                confirmed.user_id,
+            adType:
+                confirmed.ad_type,
+            status:
+                confirmed.status,
+            confirmedAt:
+                confirmed.confirmed_at
+        };
+
+
+    } catch (error) {
+
+        try {
+            await client.query(
+                "ROLLBACK"
+            );
+        } catch {
+            // Ignore rollback errors.
+        }
+
+        throw error;
+
+    } finally {
+
+        client.release();
+    }
+}
+
+
+/* =========================================================
+   CONSUME VERIFIED AD
+=========================================================
+
+This function is intentionally exported.
+
+Routes can use it to verify that a confirmed AdsGram
+reward exists before granting the actual game reward.
+========================================================= */
+
+export async function consumeVerifiedAd(
+    client,
+    userId,
+    adType
+) {
+
+    validateAdType(adType);
+
+
+    const result =
+        await client.query(
+            `
+            SELECT
+                id,
+                ad_type,
+                status,
+                confirmed_at,
+                metadata
+            FROM ad_rewards
+            WHERE
+                user_id = $1
+                AND provider = 'adsgram'
+                AND ad_type = $2
+                AND status = 'confirmed'
+                AND consumed_at IS NULL
+                AND confirmed_at >= NOW() -
+                    ($3 * INTERVAL '1 second')
+            ORDER BY confirmed_at ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            `,
+            [
+                userId,
+                adType,
+                AD_INTENT_TTL_SECONDS
+            ]
+        );
+
+
+    if (result.rowCount === 0) {
+
+        const error =
+            new Error(
+                "VERIFIED_AD_REQUIRED"
+            );
+
+        error.code =
+            "VERIFIED_AD_REQUIRED";
+
+        throw error;
+    }
+
+
+    const ad =
+        result.rows[0];
+
+
+    const consumedResult =
+        await client.query(
+            `
+            UPDATE ad_rewards
+            SET
+                consumed_at = NOW(),
+                metadata =
+                    metadata ||
+                    $1::jsonb
+            WHERE
+                id = $2
+                AND status = 'confirmed'
+                AND consumed_at IS NULL
+            RETURNING
+                id,
+                ad_type,
+                consumed_at
+            `,
+            [
+                JSON.stringify({
+                    consumedBy:
+                        "memory-card-backend"
+                }),
+                ad.id
+            ]
+        );
+
+
+    if (
+        consumedResult.rowCount === 0
+    ) {
+
+        const error =
+            new Error(
+                "AD_ALREADY_CONSUMED"
+            );
+
+        error.code =
+            "AD_ALREADY_CONSUMED";
+
+        throw error;
+    }
+
+
+    return {
+        success: true,
+        rewardId:
+            consumedResult.rows[0].id,
+        adType:
+            consumedResult.rows[0].ad_type,
+        consumedAt:
+            consumedResult.rows[0].consumed_at
+    };
+}
+
+
+/* =========================================================
+   GIVE ONE EXTRA LIFE
+========================================================= */
+
+export async function claimAdLife(
+    userId
+) {
+
+    const client =
+        await pool.connect();
+
+
+    try {
+
+        await client.query(
+            "BEGIN"
+        );
+
+
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    coins,
+                    lives
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [userId]
+            );
+
+
+        if (userResult.rowCount === 0) {
+
+            throw new Error(
+                "USER_NOT_FOUND"
+            );
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        const currentLives =
+            Math.max(
+                0,
+                Math.min(
+                    MAX_LIVES,
+                    Number(user.lives)
+                )
+            );
+
+
+        /*
+        Important:
+        Do not consume the ad if the user already has
+        maximum lives.
+        */
+
+        if (
+            currentLives >= MAX_LIVES
+        ) {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+            return {
+                success: false,
+                error:
+                    "MAX_LIVES",
+                message:
+                    "You already have the maximum number of lives.",
+                lives:
+                    MAX_LIVES
+            };
+        }
+
+
+        const ad =
+            await consumeVerifiedAd(
+                client,
+                userId,
+                "life"
+            );
+
+
+        const newLives =
+            currentLives + 1;
+
+
+        const updateResult =
+            await client.query(
+                `
+                UPDATE users
+                SET
+                    lives = $1,
+                    last_life_at =
+                        CASE
+                            WHEN $1 >= $2
+                            THEN NULL
+                            ELSE last_life_at
+                        END,
+                    updated_at = NOW()
+                WHERE id = $3
+                RETURNING
+                    lives,
+                    last_life_at
+                `,
+                [
+                    newLives,
+                    MAX_LIVES,
+                    userId
+                ]
+            );
+
+
+        if (
+            updateResult.rowCount === 0
+        ) {
+
+            throw new Error(
+                "USER_UPDATE_FAILED"
+            );
+        }
+
+
+        await client.query(
+            "COMMIT"
+        );
+
+
+        return {
+            success: true,
+            reward:
+                1,
+            lives:
+                Number(
+                    updateResult.rows[0].lives
+                ),
+            lastLifeAt:
+                updateResult.rows[0].last_life_at,
+            adRewardId:
+                ad.rewardId
+        };
+
+
+    } catch (error) {
+
+        try {
+            await client.query(
+                "ROLLBACK"
+            );
+        } catch {
+            // Ignore rollback errors.
+        }
+
+        throw error;
+
+    } finally {
+
+        client.release();
+    }
+}
+
+
+/* =========================================================
+   VERIFY DOUBLE GAME REWARD AD
+=========================================================
+
+This does NOT directly modify the game balance.
+
+The game service should call this inside its own transaction
+when it is ready to apply a 2x game reward.
+
+For now this safely consumes one verified double_reward ad.
+========================================================= */
+
+export async function consumeDoubleGameRewardAd(
+    client,
+    userId
+) {
+
+    return consumeVerifiedAd(
+        client,
+        userId,
+        "double_reward"
+    );
 }
 
 
@@ -334,16 +1209,16 @@ export async function claimDailyBonus(
     userId
 ) {
 
-    const client = await pool.connect();
+    const client =
+        await pool.connect();
+
 
     try {
 
-        await client.query("BEGIN");
+        await client.query(
+            "BEGIN"
+        );
 
-
-        /* -------------------------------------------------
-           LOCK USER
-        ------------------------------------------------- */
 
         const userResult =
             await client.query(
@@ -363,6 +1238,7 @@ export async function claimDailyBonus(
 
 
         if (userResult.rowCount === 0) {
+
             throw new Error(
                 "USER_NOT_FOUND"
             );
@@ -373,17 +1249,9 @@ export async function claimDailyBonus(
             userResult.rows[0];
 
 
-        /* -------------------------------------------------
-           TODAY IN CAMBODIA
-        ------------------------------------------------- */
-
         const today =
             getPhnomPenhDate();
 
-
-        /* -------------------------------------------------
-           ALREADY CLAIMED
-        ------------------------------------------------- */
 
         if (
             user.last_daily_claim &&
@@ -396,9 +1264,11 @@ export async function claimDailyBonus(
                 "ROLLBACK"
             );
 
+
             return {
                 success: false,
-                error: "ALREADY_CLAIMED",
+                error:
+                    "ALREADY_CLAIMED",
                 message:
                     "Daily bonus has already been claimed today.",
                 coins:
@@ -411,10 +1281,6 @@ export async function claimDailyBonus(
         }
 
 
-        /* -------------------------------------------------
-           GET REWARD
-        ------------------------------------------------- */
-
         const reward =
             await getDailyBonusAmount(
                 client
@@ -422,15 +1288,12 @@ export async function claimDailyBonus(
 
 
         if (reward <= 0) {
+
             throw new Error(
                 "DAILY_BONUS_DISABLED"
             );
         }
 
-
-        /* -------------------------------------------------
-           CALCULATE STREAK
-        ------------------------------------------------- */
 
         let newStreak = 1;
 
@@ -443,6 +1306,7 @@ export async function claimDailyBonus(
                         user.last_daily_claim
                     )}T00:00:00+07:00`
                 );
+
 
             const currentDate =
                 new Date(
@@ -473,20 +1337,13 @@ export async function claimDailyBonus(
         }
 
 
-        /* -------------------------------------------------
-           BALANCES
-        ------------------------------------------------- */
-
         const balanceBefore =
             Number(user.coins);
+
 
         const balanceAfter =
             balanceBefore + reward;
 
-
-        /* -------------------------------------------------
-           CLAIM RECORD
-        ------------------------------------------------- */
 
         const claimResult =
             await client.query(
@@ -527,10 +1384,6 @@ export async function claimDailyBonus(
             claimResult.rows[0];
 
 
-        /* -------------------------------------------------
-           UPDATE USER
-        ------------------------------------------------- */
-
         const userUpdate =
             await client.query(
                 `
@@ -557,7 +1410,10 @@ export async function claimDailyBonus(
             );
 
 
-        if (userUpdate.rowCount === 0) {
+        if (
+            userUpdate.rowCount === 0
+        ) {
+
             throw new Error(
                 "USER_UPDATE_FAILED"
             );
@@ -567,10 +1423,6 @@ export async function claimDailyBonus(
         const updatedUser =
             userUpdate.rows[0];
 
-
-        /* -------------------------------------------------
-           COIN TRANSACTION
-        ------------------------------------------------- */
 
         await client.query(
             `
@@ -608,18 +1460,26 @@ export async function claimDailyBonus(
         );
 
 
-        await client.query("COMMIT");
+        await client.query(
+            "COMMIT"
+        );
 
 
         return {
             success: true,
             reward,
             balance:
-                Number(updatedUser.coins),
+                Number(
+                    updatedUser.coins
+                ),
             todayCoins:
-                Number(updatedUser.today_coins),
+                Number(
+                    updatedUser.today_coins
+                ),
             streak:
-                Number(updatedUser.daily_streak),
+                Number(
+                    updatedUser.daily_streak
+                ),
             claimDate:
                 String(
                     updatedUser.last_daily_claim
@@ -632,7 +1492,9 @@ export async function claimDailyBonus(
     } catch (error) {
 
         try {
-            await client.query("ROLLBACK");
+            await client.query(
+                "ROLLBACK"
+            );
         } catch {
             // Ignore rollback errors.
         }
@@ -651,48 +1513,19 @@ export async function claimDailyBonus(
 ========================================================= */
 
 export async function luckyRoll(
-    userId,
-    adCompleted
+    userId
 ) {
 
-    const client = await pool.connect();
+    const client =
+        await pool.connect();
+
 
     try {
 
-        await client.query("BEGIN");
+        await client.query(
+            "BEGIN"
+        );
 
-
-        /* -------------------------------------------------
-           TEMPORARY AD GATE
-        -------------------------------------------------
-
-        IMPORTANT:
-        This does NOT verify AdsGram.
-
-        It only keeps the existing API contract working.
-
-        Production must replace this with a verified
-        server-side ad reward.
-        ------------------------------------------------- */
-
-        if (adCompleted !== true) {
-
-            await client.query(
-                "ROLLBACK"
-            );
-
-            return {
-                success: false,
-                error: "AD_REQUIRED",
-                message:
-                    "You must complete the rewarded ad before Lucky Roll."
-            };
-        }
-
-
-        /* -------------------------------------------------
-           LOCK USER
-        ------------------------------------------------- */
 
         const userResult =
             await client.query(
@@ -710,6 +1543,7 @@ export async function luckyRoll(
 
 
         if (userResult.rowCount === 0) {
+
             throw new Error(
                 "USER_NOT_FOUND"
             );
@@ -719,10 +1553,6 @@ export async function luckyRoll(
         const user =
             userResult.rows[0];
 
-
-        /* -------------------------------------------------
-           LOAD CONFIG
-        ------------------------------------------------- */
 
         const config =
             await getLuckyRollConfig(
@@ -739,7 +1569,7 @@ export async function luckyRoll(
 
 
         /* -------------------------------------------------
-           LAST ROLL
+           CHECK COOLDOWN FIRST
         ------------------------------------------------- */
 
         const lastRollResult =
@@ -794,8 +1624,10 @@ export async function luckyRoll(
                 const remainingSeconds =
                     Math.ceil(
                         (
-                            nextTime - now
-                        ) / 1000
+                            nextTime -
+                            now
+                        ) /
+                        1000
                     );
 
 
@@ -806,7 +1638,8 @@ export async function luckyRoll(
 
                 return {
                     success: false,
-                    error: "COOLDOWN",
+                    error:
+                        "COOLDOWN",
                     message:
                         "Lucky Roll is still on cooldown.",
                     remainingSeconds,
@@ -816,8 +1649,23 @@ export async function luckyRoll(
         }
 
 
+        /*
+        Only now consume the verified AdsGram reward.
+
+        This prevents an ad from being lost because the
+        Lucky Roll is still on cooldown.
+        */
+
+        const ad =
+            await consumeVerifiedAd(
+                client,
+                userId,
+                "lucky_roll"
+            );
+
+
         /* -------------------------------------------------
-           SERVER-SIDE RANDOM NUMBER
+           SERVER RANDOM
         ------------------------------------------------- */
 
         const rollNumber =
@@ -826,10 +1674,6 @@ export async function luckyRoll(
                 maximum + 1
             );
 
-
-        /* -------------------------------------------------
-           SERVER-SIDE REWARD
-        ------------------------------------------------- */
 
         const reward =
             calculateLuckyReward(
@@ -842,26 +1686,20 @@ export async function luckyRoll(
             !Number.isSafeInteger(reward) ||
             reward < 0
         ) {
+
             throw new Error(
                 "INVALID_LUCKY_REWARD"
             );
         }
 
 
-        /* -------------------------------------------------
-           BALANCES
-        ------------------------------------------------- */
-
         const balanceBefore =
             Number(user.coins);
+
 
         const balanceAfter =
             balanceBefore + reward;
 
-
-        /* -------------------------------------------------
-           SAVE ROLL
-        ------------------------------------------------- */
 
         const rollResult =
             await client.query(
@@ -904,10 +1742,6 @@ export async function luckyRoll(
             rollResult.rows[0];
 
 
-        /* -------------------------------------------------
-           UPDATE USER
-        ------------------------------------------------- */
-
         const updatedResult =
             await client.query(
                 `
@@ -928,7 +1762,10 @@ export async function luckyRoll(
             );
 
 
-        if (updatedResult.rowCount === 0) {
+        if (
+            updatedResult.rowCount === 0
+        ) {
+
             throw new Error(
                 "USER_UPDATE_FAILED"
             );
@@ -938,10 +1775,6 @@ export async function luckyRoll(
         const updatedUser =
             updatedResult.rows[0];
 
-
-        /* -------------------------------------------------
-           COIN TRANSACTION
-        ------------------------------------------------- */
 
         await client.query(
             `
@@ -981,7 +1814,34 @@ export async function luckyRoll(
         );
 
 
-        await client.query("COMMIT");
+        /*
+        Store which verified ad was consumed.
+        */
+
+        await client.query(
+            `
+            UPDATE ad_rewards
+            SET
+                metadata =
+                    metadata ||
+                    $1::jsonb
+            WHERE id = $2
+            `,
+            [
+                JSON.stringify({
+                    appliedTo:
+                        "lucky_roll",
+                    luckyRollId:
+                        roll.id
+                }),
+                ad.rewardId
+            ]
+        );
+
+
+        await client.query(
+            "COMMIT"
+        );
 
 
         const nextRoll =
@@ -997,7 +1857,8 @@ export async function luckyRoll(
             success: true,
 
             roll: {
-                id: roll.id,
+                id:
+                    roll.id,
 
                 number:
                     Number(
@@ -1026,6 +1887,7 @@ export async function luckyRoll(
             cooldownSeconds,
 
             nextRollAt:
+
                 nextRoll
         };
 
@@ -1057,17 +1919,15 @@ export async function getRewardStatus(
     userId
 ) {
 
-    const client = await pool.connect();
+    const client =
+        await pool.connect();
+
 
     try {
 
         const today =
             getPhnomPenhDate();
 
-
-        /* -------------------------------------------------
-           USER
-        ------------------------------------------------- */
 
         const userResult =
             await client.query(
@@ -1076,7 +1936,8 @@ export async function getRewardStatus(
                     coins,
                     today_coins,
                     daily_streak,
-                    last_daily_claim
+                    last_daily_claim,
+                    lives
                 FROM users
                 WHERE id = $1
                 LIMIT 1
@@ -1086,6 +1947,7 @@ export async function getRewardStatus(
 
 
         if (userResult.rowCount === 0) {
+
             throw new Error(
                 "USER_NOT_FOUND"
             );
@@ -1096,10 +1958,6 @@ export async function getRewardStatus(
             userResult.rows[0];
 
 
-        /* -------------------------------------------------
-           DAILY STATUS
-        ------------------------------------------------- */
-
         const dailyClaimed =
             Boolean(
                 user.last_daily_claim &&
@@ -1108,10 +1966,6 @@ export async function getRewardStatus(
                 ) === today
             );
 
-
-        /* -------------------------------------------------
-           LUCKY STATUS
-        ------------------------------------------------- */
 
         const luckyResult =
             await client.query(
@@ -1166,7 +2020,8 @@ export async function getRewardStatus(
 
             if (remaining > 0) {
 
-                luckyAvailable = false;
+                luckyAvailable =
+                    false;
 
                 remainingSeconds =
                     Math.ceil(
@@ -1174,7 +2029,65 @@ export async function getRewardStatus(
                     );
 
                 nextRollAt =
-                    new Date(nextTime);
+                    new Date(
+                        nextTime
+                    );
+            }
+        }
+
+
+        /*
+        Check whether a verified ad is waiting.
+
+        This is useful for frontend status/debugging.
+        */
+
+        const verifiedAdsResult =
+            await client.query(
+                `
+                SELECT
+                    ad_type,
+                    COUNT(*)::int AS count
+                FROM ad_rewards
+                WHERE
+                    user_id = $1
+                    AND provider = 'adsgram'
+                    AND status = 'confirmed'
+                    AND consumed_at IS NULL
+                    AND confirmed_at >= NOW() -
+                        ($2 * INTERVAL '1 second')
+                GROUP BY ad_type
+                `,
+                [
+                    userId,
+                    AD_INTENT_TTL_SECONDS
+                ]
+            );
+
+
+        const verifiedAds = {
+            life: 0,
+            double_reward: 0,
+            lucky_roll: 0
+        };
+
+
+        for (
+            const row
+            of verifiedAdsResult.rows
+        ) {
+
+            if (
+                Object.prototype.hasOwnProperty.call(
+                    verifiedAds,
+                    row.ad_type
+                )
+            ) {
+
+                verifiedAds[
+                    row.ad_type
+                ] =
+                    Number(row.count);
             }
         }
 
@@ -1187,6 +2100,9 @@ export async function getRewardStatus(
 
             todayCoins:
                 Number(user.today_coins),
+
+            lives:
+                Number(user.lives),
 
             dailyBonus: {
 
@@ -1214,6 +2130,12 @@ export async function getRewardStatus(
                 remainingSeconds,
 
                 nextRollAt
+            },
+
+            ads: {
+
+                verified:
+                    verifiedAds
             }
         };
 
