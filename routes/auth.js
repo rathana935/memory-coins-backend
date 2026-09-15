@@ -18,7 +18,7 @@ const router = express.Router();
    CONFIG
 ========================================================= */
 
-const REFERRAL_REWARD = 250;
+const DEFAULT_REFERRAL_REWARD = 250;
 
 
 /* =========================================================
@@ -106,6 +106,68 @@ function getReferrerTelegramId(
 
 
 /* =========================================================
+   GET REFERRAL REWARD
+========================================================= */
+
+async function getReferralReward(
+    client
+) {
+
+    try {
+
+        const result =
+            await client.query(
+                `
+                SELECT value
+                FROM app_settings
+                WHERE key = 'referral'
+                LIMIT 1
+                `
+            );
+
+
+        if (
+            result.rows.length > 0 &&
+            result.rows[0].value
+        ) {
+
+            const settings =
+                result.rows[0].value;
+
+
+            const reward =
+                Number(
+                    settings.reward_coins
+                );
+
+
+            if (
+                Number.isInteger(reward) &&
+                reward > 0
+            ) {
+
+                return reward;
+
+            }
+
+        }
+
+    } catch (error) {
+
+        console.error(
+            "Failed to load referral settings:",
+            error
+        );
+
+    }
+
+
+    return DEFAULT_REFERRAL_REWARD;
+
+}
+
+
+/* =========================================================
    POST /api/auth/telegram
 ========================================================= */
 
@@ -184,6 +246,10 @@ router.post(
                     referralCode
                 );
 
+
+            /* =================================================
+               START TRANSACTION
+            ================================================= */
 
             await client.query(
                 "BEGIN"
@@ -326,8 +392,8 @@ router.post(
             /* =================================================
                REFERRAL PROCESSING
 
-               Only NEW USERS can generate
-               a referral reward.
+               ONLY NEW USERS CAN GENERATE
+               A REFERRAL REWARD.
             ================================================= */
 
             let referralCreated =
@@ -343,6 +409,16 @@ router.post(
                 referrerTelegramId !==
                     String(tgUser.id)
             ) {
+
+                /* ---------------------------------------------
+                   GET REFERRAL REWARD
+                --------------------------------------------- */
+
+                const configuredReward =
+                    await getReferralReward(
+                        client
+                    );
+
 
                 /* ---------------------------------------------
                    FIND REFERRER
@@ -377,8 +453,7 @@ router.post(
 
 
                     /* -----------------------------------------
-                       CHECK WHETHER REFERRED USER
-                       ALREADY HAS A REFERRAL
+                       CHECK EXISTING REFERRAL
                     ----------------------------------------- */
 
                     const existingReferralResult =
@@ -409,11 +484,11 @@ router.post(
 
                         const balanceAfter =
                             balanceBefore +
-                            REFERRAL_REWARD;
+                            configuredReward;
 
 
                         /* -------------------------------------
-                           CREATE REFERRAL RECORD
+                           CREATE REFERRAL
                         ------------------------------------- */
 
                         const referralResult =
@@ -437,6 +512,10 @@ router.post(
                                     NOW(),
                                     NOW()
                                 )
+                                ON CONFLICT (
+                                    referred_user_id
+                                )
+                                DO NOTHING
                                 RETURNING id
                                 `,
                                 [
@@ -444,99 +523,156 @@ router.post(
 
                                     user.id,
 
-                                    REFERRAL_REWARD
+                                    configuredReward
                                 ]
                             );
 
 
-                        const referralId =
+                        /*
+                           Only continue with the reward
+                           if the referral was actually
+                           inserted.
+                        */
+
+                        if (
                             referralResult
-                                .rows[0]
-                                .id;
+                                .rows
+                                .length > 0
+                        ) {
+
+                            const referralId =
+                                referralResult
+                                    .rows[0]
+                                    .id;
 
 
-                        /* -------------------------------------
-                           ADD 250 COINS TO REFERRER
-                        ------------------------------------- */
+                            /* ---------------------------------
+                               ADD REFERRAL COINS
+                            --------------------------------- */
 
-                        await client.query(
-                            `
-                            UPDATE users
-                            SET
-                                coins =
-                                    coins + $1,
+                            await client.query(
+                                `
+                                UPDATE users
+                                SET
+                                    coins =
+                                        coins + $1,
 
-                                today_coins =
-                                    today_coins + $1,
+                                    today_coins =
+                                        today_coins + $1,
 
-                                updated_at =
-                                    NOW()
-                            WHERE id = $2
-                            `,
-                            [
-                                REFERRAL_REWARD,
+                                    updated_at =
+                                        NOW()
+                                WHERE id = $2
+                                `,
+                                [
+                                    configuredReward,
 
-                                referrer.id
-                            ]
-                        );
-
-
-                        /* -------------------------------------
-                           RECORD COIN TRANSACTION
-                        ------------------------------------- */
-
-                        await client.query(
-                            `
-                            INSERT INTO coin_transactions
-                            (
-                                user_id,
-                                type,
-                                amount,
-                                balance_before,
-                                balance_after,
-                                reference_id,
-                                description
-                            )
-                            VALUES
-                            (
-                                $1,
-                                $2,
-                                $3,
-                                $4,
-                                $5,
-                                $6,
-                                $7
-                            )
-                            `,
-                            [
-                                referrer.id,
-
-                                "referral",
-
-                                REFERRAL_REWARD,
-
-                                balanceBefore,
-
-                                balanceAfter,
-
-                                referralId,
-
-                                "Referral reward for inviting a new user."
-                            ]
-                        );
+                                    referrer.id
+                                ]
+                            );
 
 
-                        referralCreated =
-                            true;
+                            /* ---------------------------------
+                               RECORD COIN TRANSACTION
+                            --------------------------------- */
 
-                        referralReward =
-                            REFERRAL_REWARD;
+                            await client.query(
+                                `
+                                INSERT INTO coin_transactions
+                                (
+                                    user_id,
+                                    type,
+                                    amount,
+                                    balance_before,
+                                    balance_after,
+                                    reference_id,
+                                    description
+                                )
+                                VALUES
+                                (
+                                    $1,
+                                    $2,
+                                    $3,
+                                    $4,
+                                    $5,
+                                    $6,
+                                    $7
+                                )
+                                `,
+                                [
+                                    referrer.id,
+
+                                    "referral",
+
+                                    configuredReward,
+
+                                    balanceBefore,
+
+                                    balanceAfter,
+
+                                    referralId,
+
+                                    "Referral reward for inviting a new user."
+                                ]
+                            );
+
+
+                            referralCreated =
+                                true;
+
+                            referralReward =
+                                configuredReward;
+
+                        }
 
                     }
 
                 }
 
             }
+
+
+            /* =================================================
+               REFRESH NEW USER DATA
+            ================================================= */
+
+            const refreshedUserResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        telegram_id,
+                        username,
+                        first_name,
+                        last_name,
+                        photo_url,
+                        language_code,
+                        is_premium,
+                        coins,
+                        today_coins,
+                        games_played,
+                        easy_games,
+                        medium_games,
+                        hard_games,
+                        easy_level,
+                        medium_level,
+                        hard_level,
+                        lives,
+                        daily_streak,
+                        last_daily_claim,
+                        created_at
+                    FROM users
+                    WHERE id = $1
+                    `,
+                    [
+                        user.id
+                    ]
+                );
+
+
+            const finalUser =
+                refreshedUserResult
+                    .rows[0];
 
 
             /* =================================================
@@ -581,7 +717,7 @@ router.post(
                 )
                 `,
                 [
-                    user.id,
+                    finalUser.id,
 
                     tokenHash,
 
@@ -607,10 +743,14 @@ router.post(
                   AND expires_at < NOW()
                 `,
                 [
-                    user.id
+                    finalUser.id
                 ]
             );
 
+
+            /* =================================================
+               COMMIT
+            ================================================= */
 
             await client.query(
                 "COMMIT"
@@ -647,62 +787,62 @@ router.post(
                 user: {
 
                     id:
-                        user.id,
+                        finalUser.id,
 
                     telegramId:
-                        user.telegram_id,
+                        finalUser.telegram_id,
 
                     username:
-                        user.username,
+                        finalUser.username,
 
                     firstName:
-                        user.first_name,
+                        finalUser.first_name,
 
                     lastName:
-                        user.last_name,
+                        finalUser.last_name,
 
                     photoUrl:
-                        user.photo_url,
+                        finalUser.photo_url,
 
                     coins:
                         Number(
-                            user.coins
+                            finalUser.coins
                         ),
 
                     todayCoins:
                         Number(
-                            user.today_coins
+                            finalUser.today_coins
                         ),
 
                     gamesPlayed:
-                        user.games_played,
+                        finalUser.games_played,
 
                     easyGames:
-                        user.easy_games,
+                        finalUser.easy_games,
 
                     mediumGames:
-                        user.medium_games,
+                        finalUser.medium_games,
 
                     hardGames:
-                        user.hard_games,
+                        finalUser.hard_games,
 
                     easyLevel:
-                        user.easy_level,
+                        finalUser.easy_level,
 
                     mediumLevel:
-                        user.medium_level,
+                        finalUser.medium_level,
 
                     hardLevel:
-                        user.hard_level,
+                        finalUser.hard_level,
 
                     lives:
-                        user.lives,
+                        finalUser.lives,
 
                     dailyStreak:
-                        user.daily_streak,
+                        finalUser.daily_streak,
 
                     lastDailyClaim:
-                        user.last_daily_claim
+                        finalUser.last_daily_claim
 
                 }
 
