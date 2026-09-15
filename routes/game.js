@@ -1,5 +1,4 @@
 import express from "express";
-
 import {
     startGame,
     completeGame,
@@ -8,7 +7,6 @@ import {
 
 const router = express.Router();
 
-
 /*
 ============================================================
 HELPERS
@@ -16,373 +14,18 @@ HELPERS
 */
 
 function getUserId(req) {
-
-    return req.user?.user_id || null;
-
+    return req.user?.user_id || req.user?.id || null;
 }
 
-
-/*
-============================================================
-ERROR RESPONSE HELPER
-============================================================
-*/
-
-function sendGameError(
-    res,
-    error
-) {
-
-    const code =
-        error?.code ||
-        "";
-
-
-    /*
-    --------------------------------------------------------
-    USER
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "USER_NOT_FOUND"
-    ) {
-
-        return res.status(404).json({
-            success: false,
-            error:
-                "User not found."
-        });
-
+function isUUID(value) {
+    if (typeof value !== "string") {
+        return false;
     }
 
-
-    if (
-        code ===
-        "USER_BLOCKED"
-    ) {
-
-        return res.status(403).json({
-            success: false,
-            error:
-                "User account is blocked."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    GAME
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "GAME_SESSION_NOT_FOUND"
-    ) {
-
-        return res.status(404).json({
-            success: false,
-            error:
-                "Game session not found."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "GAME_NOT_ACTIVE"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "This game is no longer active."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "ALREADY_COMPLETED"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "This game has already been completed."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    AUTH / TOKEN
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "INVALID_COMPLETION_TOKEN"
-    ) {
-
-        return res.status(403).json({
-            success: false,
-            error:
-                "Invalid completion token."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    INPUT VALIDATION
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "INVALID_GAME_ID"
-    ) {
-
-        return res.status(400).json({
-            success: false,
-            error:
-                "Invalid game ID."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "INVALID_DIFFICULTY"
-    ) {
-
-        return res.status(400).json({
-            success: false,
-            error:
-                "Invalid difficulty. Use easy, medium, or hard."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "INVALID_MOVES"
-    ) {
-
-        return res.status(400).json({
-            success: false,
-            error:
-                "Invalid moves."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "INVALID_DURATION"
-    ) {
-
-        return res.status(400).json({
-            success: false,
-            error:
-                "Invalid duration."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "INVALID_GAME_TIME" ||
-        code ===
-        "INVALID_GAME_DURATION"
-    ) {
-
-        return res.status(400).json({
-            success: false,
-            error:
-                "Invalid game duration."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    LIVES
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "NO_LIVES"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "NO_LIVES",
-            message:
-                "No lives available. Please wait for the next life."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "UNABLE_TO_CONSUME_LIFE"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "Unable to consume a life. Please try again."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    GAME PROGRESS
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "LEVELS_COMPLETED"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "LEVELS_COMPLETED",
-            message:
-                error.message ||
-                "This difficulty is already completed."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "DIFFICULTY_ALREADY_COMPLETED"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "DIFFICULTY_ALREADY_COMPLETED",
-            message:
-                "This difficulty is already completed."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "INVALID_GAME_PROGRESS"
-    ) {
-
-        return res.status(409).json({
-            success: false,
-            error:
-                "Invalid game progress."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    SERVER CONFIGURATION
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "INVALID_GAME_REWARD" ||
-        code ===
-        "INVALID_GAME_PAIRS" ||
-        code ===
-        "INVALID_GAME_LEVEL"
-    ) {
-
-        return res.status(500).json({
-            success: false,
-            error:
-                "Game configuration error."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    USER BALANCE / DATABASE
-    --------------------------------------------------------
-    */
-
-    if (
-        code ===
-        "INVALID_USER_BALANCE"
-    ) {
-
-        return res.status(500).json({
-            success: false,
-            error:
-                "User balance configuration error."
-        });
-
-    }
-
-
-    if (
-        code ===
-        "USER_UPDATE_FAILED" ||
-        code ===
-        "GAME_COMPLETION_FAILED" ||
-        code ===
-        "GAME_SESSION_CREATE_FAILED"
-    ) {
-
-        return res.status(500).json({
-            success: false,
-            error:
-                "Unable to process game."
-        });
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    FALLBACK
-    --------------------------------------------------------
-    */
-
-    return res.status(500).json({
-        success: false,
-        error:
-            "Unable to process game."
-    });
-
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        value
+    );
 }
-
 
 /*
 ============================================================
@@ -390,70 +33,40 @@ GET GAME STATUS
 ============================================================
 
 GET /api/game/status
-
-Returns:
-
-- coins
-- today's coins
-- games played
-- difficulty progress
-- levels
-- lives
-- next life recovery time
 ============================================================
 */
 
-router.get(
-    "/status",
-    async (req, res) => {
+router.get("/status", async (req, res) => {
+    try {
+        const userId = getUserId(req);
 
-        try {
-
-            const userId =
-                getUserId(req);
-
-
-            if (!userId) {
-
-                return res.status(401).json({
-                    success: false,
-                    error:
-                        "Authentication required."
-                });
-
-            }
-
-
-            const result =
-                await getGameStatus(
-                    userId
-                );
-
-
-            return res.status(200).json(
-                result
-            );
-
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                error: "Authentication required."
+            });
         }
 
-        catch (error) {
+        const result = await getGameStatus(userId);
 
-            console.error(
-                "Game status error:",
-                error
-            );
+        return res.status(200).json(result);
 
+    } catch (error) {
+        console.error("Game status error:", error);
 
-            return sendGameError(
-                res,
-                error
-            );
-
+        if (error.message === "User not found") {
+            return res.status(404).json({
+                success: false,
+                error: "User not found."
+            });
         }
 
+        return res.status(500).json({
+            success: false,
+            error: "Unable to load game status."
+        });
     }
-);
-
+});
 
 /*
 ============================================================
@@ -474,152 +87,110 @@ easy
 medium
 hard
 
-Starting a game consumes ONE life.
+The server determines:
 
-The client cannot choose:
-
-- reward
-- pairs
 - level
-- lives
+- reward
+- cards
+- pairs
+- life consumption
+- game session
 ============================================================
 */
 
-router.post(
-    "/start",
-    async (req, res) => {
+router.post("/start", async (req, res) => {
+    try {
+        const userId = getUserId(req);
 
-        try {
-
-            const userId =
-                getUserId(req);
-
-
-            if (!userId) {
-
-                return res.status(401).json({
-                    success: false,
-                    error:
-                        "Authentication required."
-                });
-
-            }
-
-
-            const difficulty =
-                typeof req.body?.difficulty ===
-                "string"
-
-                    ? req.body.difficulty
-                        .trim()
-                        .toLowerCase()
-
-                    : "";
-
-
-            /*
-            ------------------------------------------------
-            VALIDATE DIFFICULTY
-            ------------------------------------------------
-            */
-
-            const allowedDifficulties = [
-                "easy",
-                "medium",
-                "hard"
-            ];
-
-
-            if (
-                !allowedDifficulties.includes(
-                    difficulty
-                )
-            ) {
-
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "Invalid difficulty. Use easy, medium, or hard."
-                });
-
-            }
-
-
-            /*
-            ------------------------------------------------
-            START GAME
-            ------------------------------------------------
-            */
-
-            const result =
-                await startGame(
-                    userId,
-                    difficulty
-                );
-
-
-            /*
-            ------------------------------------------------
-            NO LIVES
-            ------------------------------------------------
-            */
-
-            if (
-                result.success === false &&
-                result.error ===
-                    "NO_LIVES"
-            ) {
-
-                return res.status(409).json(
-                    result
-                );
-
-            }
-
-
-            /*
-            ------------------------------------------------
-            DIFFICULTY COMPLETED
-            ------------------------------------------------
-            */
-
-            if (
-                result.success === false &&
-                result.error ===
-                    "LEVELS_COMPLETED"
-            ) {
-
-                return res.status(409).json(
-                    result
-                );
-
-            }
-
-
-            return res.status(200).json(
-                result
-            );
-
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                error: "Authentication required."
+            });
         }
 
-        catch (error) {
+        const difficulty =
+            typeof req.body?.difficulty === "string"
+                ? req.body.difficulty.trim().toLowerCase()
+                : "";
 
-            console.error(
-                "Start game error:",
-                error
-            );
+        const allowedDifficulties = [
+            "easy",
+            "medium",
+            "hard"
+        ];
 
-
-            return sendGameError(
-                res,
-                error
-            );
-
+        if (!allowedDifficulties.includes(difficulty)) {
+            return res.status(400).json({
+                success: false,
+                error:
+                    "Invalid difficulty. Use easy, medium, or hard."
+            });
         }
 
+        const result = await startGame(
+            userId,
+            difficulty
+        );
+
+        /*
+        ----------------------------------------------------
+        No lives
+        ----------------------------------------------------
+        */
+
+        if (
+            result?.success === false &&
+            result?.error === "NO_LIVES"
+        ) {
+            return res.status(409).json(result);
+        }
+
+        /*
+        ----------------------------------------------------
+        Game limit reached
+        ----------------------------------------------------
+        */
+
+        if (
+            result?.success === false &&
+            result?.error === "GAME_LIMIT_REACHED"
+        ) {
+            return res.status(409).json(result);
+        }
+
+        return res.status(200).json(result);
+
+    } catch (error) {
+        console.error("Start game error:", error);
+
+        if (error.message === "User not found") {
+            return res.status(404).json({
+                success: false,
+                error: "User not found."
+            });
+        }
+
+        if (error.message === "Invalid difficulty") {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid difficulty."
+            });
+        }
+
+        if (error.message === "NO_LIVES") {
+            return res.status(409).json({
+                success: false,
+                error: "NO_LIVES"
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            error: "Unable to start game."
+        });
     }
-);
-
+});
 
 /*
 ============================================================
@@ -628,7 +199,7 @@ COMPLETE GAME
 
 POST /api/game/complete
 
-Expected body:
+Allowed body:
 
 {
     "gameId": "...",
@@ -637,321 +208,470 @@ Expected body:
     "durationSeconds": 25
 }
 
-IMPORTANT
-------------------------------------------------------------
-
-The client MUST NOT control:
+The client MUST NOT provide:
 
 - reward
 - coins
 - balance
 - multiplier
-- double reward
-- extra reward
+- doubleReward
+- doubleRewardVerified
 
-The server determines the normal reward from the
-game session.
+The server determines the reward.
 
-Normal rewards:
-
-Easy   = 10
-Medium = 12
-Hard   = 15
-
-Double Reward is handled separately through:
-
-POST /api/rewards/double-game-reward
 ============================================================
 */
 
-router.post(
-    "/complete",
-    async (req, res) => {
+router.post("/complete", async (req, res) => {
+    try {
+        const userId = getUserId(req);
 
-        try {
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                error: "Authentication required."
+            });
+        }
 
-            const userId =
-                getUserId(req);
+        const body = req.body || {};
 
+        /*
+        ----------------------------------------------------
+        SECURITY CHECK
+        ----------------------------------------------------
 
-            if (!userId) {
+        These values must NEVER be accepted from the client.
 
-                return res.status(401).json({
-                    success: false,
-                    error:
-                        "Authentication required."
-                });
+        We explicitly reject them instead of silently ignoring
+        them so frontend mistakes are easier to detect.
+        ----------------------------------------------------
+        */
 
-            }
+        const forbiddenFields = [
+            "reward",
+            "coins",
+            "balance",
+            "multiplier",
+            "rewardMultiplier",
+            "doubleReward",
+            "doubleRewardVerified",
+            "adCompleted",
+            "adVerified",
+            "payout"
+        ];
 
-
-            const body =
-                req.body || {};
-
-
-            /*
-            ------------------------------------------------
-            REJECT CLIENT-SIDE REWARD MANIPULATION
-            ------------------------------------------------
-
-            These fields should NEVER be accepted by the
-            normal completion endpoint.
-
-            We reject them instead of silently ignoring them.
-
-            This makes accidental frontend bugs easier to
-            detect and prevents the API contract from becoming
-            ambiguous.
-            ------------------------------------------------
-            */
-
-            const forbiddenFields = [
-
-                "reward",
-
-                "coins",
-
-                "balance",
-
-                "extraCoins",
-
-                "rewardCoins",
-
-                "multiplier",
-
-                "rewardMultiplier",
-
-                "doubleReward",
-
-                "doubleRewardVerified",
-
-                "double_reward",
-
-                "adCompleted",
-
-                "ad_completed"
-
-            ];
-
-
-            const suppliedForbiddenField =
-                forbiddenFields.find(
-                    field =>
-                        Object.prototype
-                            .hasOwnProperty.call(
-                                body,
-                                field
-                            )
-                );
-
-
+        for (const field of forbiddenFields) {
             if (
-                suppliedForbiddenField
+                Object.prototype.hasOwnProperty.call(
+                    body,
+                    field
+                )
             ) {
-
                 return res.status(400).json({
                     success: false,
                     error:
-                        "CLIENT_REWARD_FIELD_NOT_ALLOWED",
-                    message:
-                        `${suppliedForbiddenField} cannot be sent to the game completion endpoint.`
+                        `Field "${field}" is not allowed.`
                 });
-
             }
+        }
 
+        /*
+        ----------------------------------------------------
+        Read allowed fields only
+        ----------------------------------------------------
+        */
 
-            /*
-            ------------------------------------------------
-            READ ALLOWED FIELDS ONLY
-            ------------------------------------------------
-            */
-
-            const {
-                gameId,
-                completionToken,
-                moves,
-                durationSeconds
-            } = body;
-
+        const {
+            gameId,
+            completionToken,
+            moves,
+            durationSeconds,
 
             /*
-            ------------------------------------------------
-            GAME ID
-            ------------------------------------------------
+            Future server-verifiable puzzle proof.
+
+            The current game service does not require these
+            yet, so they remain optional for compatibility.
             */
+            matchedPairs,
+            moveSequence
+        } = body;
 
-            if (
-                gameId === undefined ||
-                gameId === null ||
-                String(gameId).trim() === ""
-            ) {
+        /*
+        ----------------------------------------------------
+        GAME ID
+        ----------------------------------------------------
+        */
 
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "gameId is required."
-                });
+        if (
+            typeof gameId !== "string" ||
+            gameId.trim() === ""
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "gameId is required."
+            });
+        }
 
-            }
+        const normalizedGameId = gameId.trim();
 
+        if (!isUUID(normalizedGameId)) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid gameId."
+            });
+        }
 
-            /*
-            ------------------------------------------------
-            COMPLETION TOKEN
-            ------------------------------------------------
-            */
+        /*
+        ----------------------------------------------------
+        COMPLETION TOKEN
+        ----------------------------------------------------
+        */
 
-            if (
-                typeof completionToken !==
-                "string" ||
-                completionToken.trim() === ""
-            ) {
+        if (
+            typeof completionToken !== "string" ||
+            completionToken.trim() === ""
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "completionToken is required."
+            });
+        }
 
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "completionToken is required."
-                });
+        const normalizedToken =
+            completionToken.trim();
 
-            }
+        /*
+        ----------------------------------------------------
+        TOKEN LENGTH
+        ----------------------------------------------------
 
+        Prevent unnecessarily huge request payloads.
+        ----------------------------------------------------
+        */
 
-            /*
-            ------------------------------------------------
-            MOVES
-            ------------------------------------------------
-            */
+        if (
+            normalizedToken.length < 16 ||
+            normalizedToken.length > 512
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid completionToken."
+            });
+        }
 
-            const parsedMoves =
-                Number(
-                    moves
-                );
+        /*
+        ----------------------------------------------------
+        MOVES
+        ----------------------------------------------------
+        */
 
+        const parsedMoves = Number(moves);
 
-            if (
+        if (
+            !Number.isInteger(parsedMoves) ||
+            parsedMoves < 1 ||
+            parsedMoves > 10000
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid moves."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        DURATION
+        ----------------------------------------------------
+        */
+
+        const parsedDuration =
+            Number(durationSeconds);
+
+        if (
+            !Number.isFinite(parsedDuration) ||
+            parsedDuration < 1 ||
+            parsedDuration > 86400
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid duration."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        OPTIONAL PUZZLE PROOF
+        ----------------------------------------------------
+
+        These values are accepted only for the future secure
+        puzzle-verification implementation.
+
+        They do NOT currently determine the reward.
+        ----------------------------------------------------
+        */
+
+        if (
+            matchedPairs !== undefined &&
+            (
                 !Number.isInteger(
-                    parsedMoves
+                    Number(matchedPairs)
                 ) ||
-                parsedMoves < 0 ||
-                parsedMoves > 10000
-            ) {
-
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "Invalid moves."
-                });
-
-            }
-
-
-            /*
-            ------------------------------------------------
-            DURATION
-            ------------------------------------------------
-            */
-
-            const parsedDuration =
-                Number(
-                    durationSeconds
-                );
-
-
-            if (
-                !Number.isFinite(
-                    parsedDuration
-                ) ||
-                parsedDuration < 0 ||
-                parsedDuration > 86400
-            ) {
-
-                return res.status(400).json({
-                    success: false,
-                    error:
-                        "Invalid duration."
-                });
-
-            }
-
-
-            /*
-            ------------------------------------------------
-            COMPLETE GAME
-            ------------------------------------------------
-            */
-
-            const result =
-                await completeGame({
-
-                    userId,
-
-                    gameId:
-                        String(
-                            gameId
-                        ).trim(),
-
-                    completionToken:
-                        completionToken.trim(),
-
-                    moves:
-                        parsedMoves,
-
-                    durationSeconds:
-                        Math.floor(
-                            parsedDuration
-                        )
-
-                });
-
-
-            /*
-            ------------------------------------------------
-            DUPLICATE COMPLETION
-            ------------------------------------------------
-            */
-
-            if (
-                result.success === false &&
-                result.error ===
-                    "ALREADY_COMPLETED"
-            ) {
-
-                return res.status(409).json(
-                    result
-                );
-
-            }
-
-
-            return res.status(200).json(
-                result
-            );
-
+                Number(matchedPairs) < 0 ||
+                Number(matchedPairs) > 100
+            )
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid matchedPairs."
+            });
         }
 
-        catch (error) {
-
-            console.error(
-                "Complete game error:",
-                error
-            );
-
-
-            return sendGameError(
-                res,
-                error
-            );
-
+        if (
+            moveSequence !== undefined &&
+            !Array.isArray(moveSequence)
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid moveSequence."
+            });
         }
 
+        /*
+        ----------------------------------------------------
+        COMPLETE GAME
+        ----------------------------------------------------
+
+        IMPORTANT:
+
+        No reward is supplied.
+
+        No coin amount is supplied.
+
+        No multiplier is supplied.
+
+        The service determines the reward from the
+        server-created game session.
+        ----------------------------------------------------
+        */
+
+        const result = await completeGame({
+            userId,
+
+            gameId:
+                normalizedGameId,
+
+            completionToken:
+                normalizedToken,
+
+            moves:
+                parsedMoves,
+
+            durationSeconds:
+                Math.floor(parsedDuration),
+
+            /*
+            Future proof data.
+            The current service can safely ignore these.
+            */
+            matchedPairs:
+                matchedPairs === undefined
+                    ? undefined
+                    : Number(matchedPairs),
+
+            moveSequence:
+                moveSequence === undefined
+                    ? undefined
+                    : moveSequence
+        });
+
+        /*
+        ----------------------------------------------------
+        KNOWN RESULT ERRORS
+        ----------------------------------------------------
+        */
+
+        if (
+            result?.success === false &&
+            result?.error === "ALREADY_COMPLETED"
+        ) {
+            return res.status(409).json(result);
+        }
+
+        if (
+            result?.success === false &&
+            result?.error === "GAME_NOT_FOUND"
+        ) {
+            return res.status(404).json(result);
+        }
+
+        return res.status(200).json(result);
+
+    } catch (error) {
+        console.error(
+            "Complete game error:",
+            error
+        );
+
+        /*
+        ----------------------------------------------------
+        GAME SESSION
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Game session not found"
+        ) {
+            return res.status(404).json({
+                success: false,
+                error:
+                    "Game session not found."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        TOKEN
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Invalid completion token"
+        ) {
+            return res.status(403).json({
+                success: false,
+                error:
+                    "Invalid completion token."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        MOVES
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Invalid moves"
+        ) {
+            return res.status(400).json({
+                success: false,
+                error:
+                    "Invalid moves."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        DURATION
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Invalid duration"
+        ) {
+            return res.status(400).json({
+                success: false,
+                error:
+                    "Invalid duration."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        USER
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "User not found"
+        ) {
+            return res.status(404).json({
+                success: false,
+                error:
+                    "User not found."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        GAME REWARD CONFIGURATION
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Invalid game reward"
+        ) {
+            return res.status(500).json({
+                success: false,
+                error:
+                    "Game reward configuration error."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        PUZZLE VERIFICATION
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Invalid puzzle proof"
+        ) {
+            return res.status(403).json({
+                success: false,
+                error:
+                    "Invalid puzzle proof."
+            });
+        }
+
+        if (
+            error.message ===
+            "Puzzle not solved"
+        ) {
+            return res.status(403).json({
+                success: false,
+                error:
+                    "Puzzle was not solved."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        GAME EXPIRED
+        ----------------------------------------------------
+        */
+
+        if (
+            error.message ===
+            "Game session expired"
+        ) {
+            return res.status(409).json({
+                success: false,
+                error:
+                    "Game session expired."
+            });
+        }
+
+        /*
+        ----------------------------------------------------
+        UNKNOWN ERROR
+        ----------------------------------------------------
+        */
+
+        return res.status(500).json({
+            success: false,
+            error:
+                "Unable to complete game."
+        });
     }
-);
-
-
-/*
-============================================================
-EXPORT
-============================================================
-*/
+});
 
 export default router;
