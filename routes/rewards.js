@@ -9,7 +9,22 @@ import {
     getRewardStatus
 } from "../services/rewards.js";
 
+import pool from "../db/pool.js";
+
 const router = express.Router();
+
+
+/*
+============================================================
+HELPER
+============================================================
+*/
+
+function getUserId(req) {
+
+    return req.user?.user_id || null;
+
+}
 
 
 /*
@@ -18,18 +33,13 @@ POST /api/rewards/ad-intent
 
 Creates a short-lived server-side AdsGram reward intent.
 
-The frontend requests this BEFORE showing an ad.
-
-Supported ad types:
+Supported:
 - life
 - double_reward
 - lucky_roll
 
-IMPORTANT:
-The client does NOT receive permission to directly award
-coins or lives.
-
-The AdsGram Reward URL must later confirm the intent.
+For double_reward:
+gameSessionId is REQUIRED.
 ============================================================
 */
 
@@ -39,8 +49,7 @@ router.post(
 
         try {
 
-            const userId =
-                req.user?.user_id;
+            const userId = getUserId(req);
 
             if (!userId) {
 
@@ -77,9 +86,42 @@ router.post(
 
             const metadata =
                 req.body?.metadata &&
-                typeof req.body.metadata === "object"
+                typeof req.body.metadata === "object" &&
+                !Array.isArray(req.body.metadata)
                     ? req.body.metadata
                     : {};
+
+
+            /*
+            ------------------------------------------------
+            Double Reward MUST be connected to a game session
+            ------------------------------------------------
+            */
+
+            if (adType === "double_reward") {
+
+                const gameSessionId =
+                    String(
+                        metadata.gameSessionId ||
+                        req.body?.gameSessionId ||
+                        ""
+                    ).trim();
+
+
+                if (!gameSessionId) {
+
+                    return res.status(400).json({
+                        success: false,
+                        error: "GAME_SESSION_ID_REQUIRED"
+                    });
+
+                }
+
+
+                metadata.gameSessionId =
+                    gameSessionId;
+
+            }
 
 
             const result =
@@ -112,6 +154,42 @@ router.post(
             }
 
 
+            if (
+                error.message === "USER_BLOCKED"
+            ) {
+
+                return res.status(403).json({
+                    success: false,
+                    error: "USER_BLOCKED"
+                });
+
+            }
+
+
+            if (
+                error.message === "GAME_SESSION_ID_REQUIRED"
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    error: "GAME_SESSION_ID_REQUIRED"
+                });
+
+            }
+
+
+            if (
+                error.message === "INVALID_GAME_SESSION_ID"
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    error: "INVALID_GAME_SESSION_ID"
+                });
+
+            }
+
+
             return res.status(500).json({
                 success: false,
                 error:
@@ -130,10 +208,13 @@ POST /api/rewards/daily
 
 Claim Daily Bonus.
 
-IMPORTANT:
-- Client cannot choose reward amount.
-- Server calculates reward.
-- Authentication is required.
+The server determines:
+- reward amount
+- date
+- streak
+- balance
+
+The client cannot choose the reward.
 ============================================================
 */
 
@@ -143,8 +224,7 @@ router.post(
 
         try {
 
-            const userId =
-                req.user?.user_id;
+            const userId = getUserId(req);
 
             if (!userId) {
 
@@ -193,6 +273,18 @@ router.post(
 
 
             if (
+                error.message === "USER_BLOCKED"
+            ) {
+
+                return res.status(403).json({
+                    success: false,
+                    error: "USER_BLOCKED"
+                });
+
+            }
+
+
+            if (
                 error.message ===
                 "DAILY_BONUS_DISABLED"
             ) {
@@ -224,10 +316,7 @@ POST /api/rewards/lucky-roll
 
 Lucky Roll.
 
-IMPORTANT SECURITY RULE
-------------------------------------------------------------
-The frontend MUST NOT send:
-
+The frontend MUST NOT provide:
 - adCompleted
 - reward
 - coins
@@ -235,11 +324,12 @@ The frontend MUST NOT send:
 - balance
 - payout
 
-The server checks whether a VERIFIED AdsGram reward
-is available for the user.
-
-The server generates the random number and calculates
-the reward.
+The server:
+1. Checks cooldown
+2. Consumes verified AdsGram reward
+3. Generates random number
+4. Calculates reward
+5. Updates balance
 ============================================================
 */
 
@@ -249,8 +339,7 @@ router.post(
 
         try {
 
-            const userId =
-                req.user?.user_id;
+            const userId = getUserId(req);
 
             if (!userId) {
 
@@ -266,12 +355,6 @@ router.post(
                 await luckyRoll(userId);
 
 
-            /*
-            ------------------------------------------------
-            Verified advertisement required
-            ------------------------------------------------
-            */
-
             if (
                 result.success === false &&
                 result.error === "AD_REQUIRED"
@@ -281,12 +364,6 @@ router.post(
 
             }
 
-
-            /*
-            ------------------------------------------------
-            Cooldown
-            ------------------------------------------------
-            */
 
             if (
                 result.success === false &&
@@ -315,6 +392,18 @@ router.post(
                 return res.status(404).json({
                     success: false,
                     error: "User not found."
+                });
+
+            }
+
+
+            if (
+                error.message === "USER_BLOCKED"
+            ) {
+
+                return res.status(403).json({
+                    success: false,
+                    error: "USER_BLOCKED"
                 });
 
             }
@@ -350,10 +439,10 @@ router.post(
 ============================================================
 POST /api/rewards/life
 
-Watch AdsGram rewarded ad → +1 Life.
+Watch verified AdsGram rewarded ad → +1 Life.
 
 The server only grants the life when a verified,
-unused AdsGram reward exists.
+unused advertisement reward exists.
 ============================================================
 */
 
@@ -363,8 +452,7 @@ router.post(
 
         try {
 
-            const userId =
-                req.user?.user_id;
+            const userId = getUserId(req);
 
             if (!userId) {
 
@@ -422,6 +510,18 @@ router.post(
             }
 
 
+            if (
+                error.message === "USER_BLOCKED"
+            ) {
+
+                return res.status(403).json({
+                    success: false,
+                    error: "USER_BLOCKED"
+                });
+
+            }
+
+
             return res.status(500).json({
                 success: false,
                 error:
@@ -438,15 +538,28 @@ router.post(
 ============================================================
 POST /api/rewards/double-game-reward
 
-Consumes a VERIFIED AdsGram reward for the
-Double Reward feature.
+Consumes a VERIFIED AdsGram reward for a specific
+completed game session.
+
+REQUEST:
+
+{
+    "gameSessionId": "UUID"
+}
 
 IMPORTANT:
-This endpoint should eventually be connected directly
-to the completed game session/result so the same game
-cannot be doubled more than once.
+The gameSessionId comes from the server when the game
+starts.
 
-The service must remain server-authoritative.
+The server verifies:
+- authenticated user
+- valid session
+- session belongs to user
+- verified AdsGram reward
+- reward intent is tied to this session
+- ad has not already been consumed
+
+The client cannot choose the reward amount.
 ============================================================
 */
 
@@ -454,10 +567,13 @@ router.post(
     "/double-game-reward",
     async (req, res) => {
 
+        const client =
+            await pool.connect();
+
+
         try {
 
-            const userId =
-                req.user?.user_id;
+            const userId = getUserId(req);
 
             if (!userId) {
 
@@ -469,9 +585,118 @@ router.post(
             }
 
 
+            const gameSessionId =
+                String(
+                    req.body?.gameSessionId || ""
+                ).trim();
+
+
+            if (!gameSessionId) {
+
+                return res.status(400).json({
+                    success: false,
+                    error:
+                        "GAME_SESSION_ID_REQUIRED"
+                });
+
+            }
+
+
+            /*
+            ------------------------------------------------
+            Validate UUID format before database query.
+            ------------------------------------------------
+            */
+
+            const UUID_REGEX =
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+
+            if (!UUID_REGEX.test(gameSessionId)) {
+
+                return res.status(400).json({
+                    success: false,
+                    error:
+                        "INVALID_GAME_SESSION_ID"
+                });
+
+            }
+
+
+            /*
+            ------------------------------------------------
+            Verify the game session belongs to this user.
+            ------------------------------------------------
+            */
+
+            const sessionResult =
+                await client.query(
+                    `
+                    SELECT
+                        id,
+                        user_id,
+                        difficulty,
+                        status,
+                        reward_coins
+                    FROM game_sessions
+                    WHERE id = $1
+                      AND user_id = $2
+                    LIMIT 1
+                    `,
+                    [
+                        gameSessionId,
+                        userId
+                    ]
+                );
+
+
+            if (
+                sessionResult.rowCount === 0
+            ) {
+
+                return res.status(404).json({
+                    success: false,
+                    error:
+                        "GAME_SESSION_NOT_FOUND"
+                });
+
+            }
+
+
+            const session =
+                sessionResult.rows[0];
+
+
+            /*
+            ------------------------------------------------
+            Only completed games can receive Double Reward.
+            ------------------------------------------------
+            */
+
+            if (
+                session.status !== "completed"
+            ) {
+
+                return res.status(409).json({
+                    success: false,
+                    error:
+                        "GAME_SESSION_NOT_COMPLETED"
+                });
+
+            }
+
+
+            /*
+            ------------------------------------------------
+            Consume the verified AdsGram reward.
+            ------------------------------------------------
+            */
+
             const result =
                 await consumeDoubleGameRewardAd(
-                    userId
+                    client,
+                    userId,
+                    gameSessionId
                 );
 
 
@@ -507,11 +732,41 @@ router.post(
             }
 
 
+            if (
+                error.message === "USER_BLOCKED"
+            ) {
+
+                return res.status(403).json({
+                    success: false,
+                    error: "USER_BLOCKED"
+                });
+
+            }
+
+
+            if (
+                error.message ===
+                "INVALID_GAME_SESSION_ID"
+            ) {
+
+                return res.status(400).json({
+                    success: false,
+                    error:
+                        "INVALID_GAME_SESSION_ID"
+                });
+
+            }
+
+
             return res.status(500).json({
                 success: false,
                 error:
                     "Unable to verify double reward advertisement."
             });
+
+        } finally {
+
+            client.release();
 
         }
 
@@ -524,15 +779,13 @@ router.post(
 GET /api/rewards/status
 
 Returns:
-
 - balance
 - today's coins
-- daily bonus amount
-- daily bonus claimed status
+- daily bonus
+- daily claim status
 - streak
-- Lucky Roll availability
+- Lucky Roll status
 - Lucky Roll cooldown
-- remaining seconds
 - next roll time
 - lives
 - verified advertisement counts
@@ -545,8 +798,7 @@ router.get(
 
         try {
 
-            const userId =
-                req.user?.user_id;
+            const userId = getUserId(req);
 
             if (!userId) {
 
@@ -559,9 +811,7 @@ router.get(
 
 
             const result =
-                await getRewardStatus(
-                    userId
-                );
+                await getRewardStatus(userId);
 
 
             return res.status(200).json(result);
@@ -581,6 +831,18 @@ router.get(
                 return res.status(404).json({
                     success: false,
                     error: "User not found."
+                });
+
+            }
+
+
+            if (
+                error.message === "USER_BLOCKED"
+            ) {
+
+                return res.status(403).json({
+                    success: false,
+                    error: "USER_BLOCKED"
                 });
 
             }
