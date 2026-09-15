@@ -2,42 +2,51 @@ import crypto from "crypto";
 import pool from "../db/pool.js";
 
 /*
-
-MEMORY COINS
+=========================================================
+MEMORY CARD / MEMORY COINS
 REWARDS SERVICE
+=========================================================
 
-Features:
+DAILY BONUS
+- Default: 100 coins
+- Once per Cambodia calendar day
+- Daily streak
+- Server-side transaction
 
-1. Daily Bonus
-   
-   - Default reward: 100 coins
-   - Once per calendar day
-   - Uses Asia/Phnom_Penh date
-   - Tracks daily streak
+LUCKY ROLL
+- 1 roll every 5 minutes
+- Number: 1 - 99,999
+- Reward calculated server-side
+- Exact payout table:
+    1 - 89,999       = +5
+    90,000 - 94,999  = +8
+    95,000 - 99,499  = +12
+    99,500 - 99,996  = +18
+    99,997 - 99,998  = +82
+    99,999            = +10,000
 
-2. Lucky Roll
-   
-   - One roll every 5 minutes
-   - Number: 1 - 99,999
-   - Reward calculated SERVER-SIDE
-   - Requires adCompleted = true
-   - Uses PostgreSQL row locking
-   - Prevents double rewards from concurrent requests
+SECURITY
+- Browser NEVER chooses reward
+- Browser NEVER chooses roll number
+- User balance is locked with FOR UPDATE
+- Coin changes happen inside transactions
 
-IMPORTANT:
+IMPORTANT
+---------------------------------------------------------
+The current adCompleted parameter is only a temporary
+server-side gate.
 
-The browser NEVER decides how many coins to award.
+It is NOT proof that an AdsGram ad was actually watched.
 
-All coin changes happen inside PostgreSQL transactions.
-
-============================================================
+Before production, this must be replaced with real
+server-side AdsGram reward verification.
+=========================================================
 */
 
-/*
 
-CONFIGURATION
-
-*/
+/* =========================================================
+   DEFAULT CONFIG
+========================================================= */
 
 const DEFAULT_DAILY_BONUS = 100;
 
@@ -47,44 +56,33 @@ const DEFAULT_LUCKY_MIN = 1;
 
 const DEFAULT_LUCKY_MAX = 99999;
 
-/*
 
-HELPERS
-
-*/
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function getPhnomPenhDate() {
-
-return new Intl.DateTimeFormat(
-    "en-CA",
-    {
-        timeZone: "Asia/Phnom_Penh",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-    }
-).format(
-    new Date()
-);
-
+    return new Intl.DateTimeFormat(
+        "en-CA",
+        {
+            timeZone: "Asia/Phnom_Penh",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+        }
+    ).format(new Date());
 }
 
-/*
 
-LOAD APP SETTING
+/* =========================================================
+   LOAD APP SETTING
+========================================================= */
 
-*/
+async function getSetting(client, key) {
 
-async function getSetting(
-client,
-key
-) {
-
-const result =
-    await client.query(
+    const result = await client.query(
         `
-        SELECT
-            value
+        SELECT value
         FROM app_settings
         WHERE key = $1
         LIMIT 1
@@ -92,1399 +90,1136 @@ const result =
         [key]
     );
 
-if (
-    result.rows.length === 0
-) {
+    if (result.rowCount === 0) {
+        return null;
+    }
 
-    return null;
-
+    return result.rows[0].value;
 }
 
-return result.rows[0].value;
 
-}
+/* =========================================================
+   DAILY BONUS CONFIG
+========================================================= */
 
-/*
+async function getDailyBonusAmount(client) {
 
-GET DAILY BONUS CONFIG
-
-*/
-
-async function getDailyBonusAmount(
-client
-) {
-
-const economy =
-    await getSetting(
+    const economy = await getSetting(
         client,
         "economy"
     );
 
-if (
-    economy &&
-    Number.isFinite(
-        Number(
-            economy.daily_bonus
-        )
-    )
-) {
+    const value =
+        economy?.daily_bonus;
 
-    return Math.max(
-        0,
-        Math.floor(
-            Number(
-                economy.daily_bonus
-            )
-        )
-    );
+    const reward = Number(value);
 
+    if (
+        Number.isFinite(reward) &&
+        Number.isSafeInteger(reward) &&
+        reward > 0
+    ) {
+        return reward;
+    }
+
+    return DEFAULT_DAILY_BONUS;
 }
 
-return DEFAULT_DAILY_BONUS;
 
+/* =========================================================
+   DEFAULT LUCKY REWARDS
+========================================================= */
+
+function getDefaultLuckyRewards() {
+    return {
+        default: 5,
+        "90000": 8,
+        "95000": 12,
+        "99500": 18,
+        "99997": 82,
+        "99999": 10000
+    };
 }
 
-/*
 
-GET LUCKY ROLL CONFIG
+/* =========================================================
+   LUCKY ROLL CONFIG
+========================================================= */
 
-*/
+async function getLuckyRollConfig(client) {
 
-async function getLuckyRollConfig(
-client
-) {
-
-const setting =
-    await getSetting(
+    const setting = await getSetting(
         client,
         "lucky_roll"
     );
 
-if (!setting) {
+    const defaults = getDefaultLuckyRewards();
 
-    return {
-
-        cooldownSeconds:
-            DEFAULT_LUCKY_COOLDOWN_SECONDS,
-
-        minimum:
-            DEFAULT_LUCKY_MIN,
-
-        maximum:
-            DEFAULT_LUCKY_MAX,
-
-        rewards: {
-
-            default: 5,
-
-            "90000": 8,
-
-            "95000": 12,
-
-            "99500": 18,
-
-            "99997": 82,
-
-            "99999": 10000
-
-        }
-
-    };
-
-}
-
-return {
-
-    cooldownSeconds:
+    const cooldownRaw =
         Number(
-            setting.cooldown_seconds ??
+            setting?.cooldown_seconds ??
             DEFAULT_LUCKY_COOLDOWN_SECONDS
-        ),
+        );
 
-    minimum:
+    const minimumRaw =
         Number(
-            setting.minimum ??
+            setting?.minimum ??
             DEFAULT_LUCKY_MIN
-        ),
+        );
 
-    maximum:
+    const maximumRaw =
         Number(
-            setting.maximum ??
+            setting?.maximum ??
             DEFAULT_LUCKY_MAX
-        ),
-
-    rewards:
-        setting.rewards || {
-
-            default: 5,
-
-            "90000": 8,
-
-            "95000": 12,
-
-            "99500": 18,
-
-            "99997": 82,
-
-            "99999": 10000
-
-        }
-
-};
-
-}
-
-/*
-
-CALCULATE LUCKY ROLL REWARD
-
-Current rules:
-
-1 - 89,999
-+5 coins
-
-90,000 - 94,999
-+8 coins
-
-95,000 - 99,499
-+12 coins
-
-99,500 - 99,996
-+18 coins
-
-99,997 - 99,998
-+82 coins
-
-99,999
-+10,000 coins
-
-============================================================
-*/
-
-function calculateLuckyReward(
-rollNumber,
-rewards
-) {
-
-const number =
-    Number(rollNumber);
-
-if (
-    number === 99999
-) {
-
-    return Number(
-        rewards["99999"] ?? 10000
-    );
-
-}
-
-if (
-    number >= 99997
-) {
-
-    return Number(
-        rewards["99997"] ?? 82
-    );
-
-}
-
-if (
-    number >= 99500
-) {
-
-    return Number(
-        rewards["99500"] ?? 18
-    );
-
-}
-
-if (
-    number >= 95000
-) {
-
-    return Number(
-        rewards["95000"] ?? 12
-    );
-
-}
-
-if (
-    number >= 90000
-) {
-
-    return Number(
-        rewards["90000"] ?? 8
-    );
-
-}
-
-return Number(
-    rewards.default ?? 5
-);
-
-}
-
-/*
-
-DAILY BONUS
-
-POST /api/rewards/daily
-
-Rules:
-
-- One claim per calendar day
-- +100 coins
-- Daily streak is maintained
-- Transaction is atomic
-- Duplicate requests cannot award twice
-
-============================================================
-*/
-
-export async function claimDailyBonus(
-userId
-) {
-
-const client =
-    await pool.connect();
-
-try {
-
-    await client.query(
-        "BEGIN"
-    );
-
-
-    /*
-    --------------------------------------------------------
-    LOCK USER
-    --------------------------------------------------------
-    */
-
-    const userResult =
-        await client.query(
-            `
-            SELECT
-                id,
-                coins,
-                today_coins,
-                daily_streak,
-                last_daily_claim
-            FROM users
-            WHERE id = $1
-            FOR UPDATE
-            `,
-            [userId]
         );
-
-
-    if (
-        userResult.rows.length === 0
-    ) {
-
-        throw new Error(
-            "User not found."
-        );
-
-    }
-
-
-    const user =
-        userResult.rows[0];
-
-
-    /*
-    --------------------------------------------------------
-    TODAY IN CAMBODIA TIME
-    --------------------------------------------------------
-    */
-
-    const today =
-        getPhnomPenhDate();
-
-
-    /*
-    --------------------------------------------------------
-    CHECK ALREADY CLAIMED
-    --------------------------------------------------------
-    */
-
-    if (
-        user.last_daily_claim &&
-        String(
-            user.last_daily_claim
-        ) === today
-    ) {
-
-        await client.query(
-            "ROLLBACK"
-        );
-
-        return {
-
-            success: false,
-
-            error:
-                "ALREADY_CLAIMED",
-
-            message:
-                "Daily bonus has already been claimed today.",
-
-            coins:
-                Number(
-                    user.coins
-                ),
-
-            streak:
-                Number(
-                    user.daily_streak
-                ),
-
-            claimDate:
-                today
-
-        };
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    GET DAILY BONUS AMOUNT
-    --------------------------------------------------------
-    */
-
-    const reward =
-        await getDailyBonusAmount(
-            client
-        );
-
-
-    if (
-        reward <= 0
-    ) {
-
-        throw new Error(
-            "Daily bonus is disabled."
-        );
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    CALCULATE STREAK
-    --------------------------------------------------------
-    */
-
-    let newStreak = 1;
-
-
-    if (
-        user.last_daily_claim
-    ) {
-
-        const previousDate =
-            new Date(
-                `${String(
-                    user.last_daily_claim
-                )}T00:00:00+07:00`
-            );
-
-        const currentDate =
-            new Date(
-                `${today}T00:00:00+07:00`
-            );
-
-
-        const difference =
-            Math.floor(
-                (
-                    currentDate.getTime() -
-                    previousDate.getTime()
-                ) /
-                (
-                    24 *
-                    60 *
-                    60 *
-                    1000
-                )
-            );
-
-
-        if (
-            difference === 1
-        ) {
-
-            newStreak =
-                Math.min(
-                    7,
-                    Number(
-                        user.daily_streak
-                    ) + 1
-                );
-
-        }
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    BALANCE BEFORE
-    --------------------------------------------------------
-    */
-
-    const balanceBefore =
-        Number(
-            user.coins
-        );
-
-
-    /*
-    --------------------------------------------------------
-    ADD COINS
-    --------------------------------------------------------
-    */
-
-    const balanceAfter =
-        balanceBefore +
-        reward;
-
-
-    /*
-    --------------------------------------------------------
-    CREATE CLAIM RECORD
-    --------------------------------------------------------
-    */
-
-    const claimResult =
-        await client.query(
-            `
-            INSERT INTO daily_bonus_claims
-            (
-                user_id,
-                claim_date,
-                day_number,
-                reward_coins,
-                created_at
-            )
-            VALUES
-            (
-                $1,
-                $2,
-                $3,
-                $4,
-                NOW()
-            )
-            RETURNING
-                id,
-                claim_date,
-                day_number,
-                reward_coins,
-                created_at
-            `,
-            [
-                userId,
-                today,
-                newStreak,
-                reward
-            ]
-        );
-
-
-    const claim =
-        claimResult.rows[0];
-
-
-    /*
-    --------------------------------------------------------
-    UPDATE USER BALANCE
-    --------------------------------------------------------
-    */
-
-    const userUpdate =
-        await client.query(
-            `
-            UPDATE users
-            SET
-                coins =
-                    coins + $1,
-
-                today_coins =
-                    today_coins + $1,
-
-                daily_streak =
-                    $2,
-
-                last_daily_claim =
-                    $3
-
-            WHERE id = $4
-
-            RETURNING
-                coins,
-                today_coins,
-                daily_streak,
-                last_daily_claim
-            `,
-            [
-                reward,
-                newStreak,
-                today,
-                userId
-            ]
-        );
-
-
-    if (
-        userUpdate.rows.length === 0
-    ) {
-
-        throw new Error(
-            "Unable to update user balance."
-        );
-
-    }
-
-
-    const updatedUser =
-        userUpdate.rows[0];
-
-
-    /*
-    --------------------------------------------------------
-    RECORD COIN TRANSACTION
-    --------------------------------------------------------
-    */
-
-    await client.query(
-        `
-        INSERT INTO coin_transactions
-        (
-            user_id,
-            type,
-            amount,
-            balance_before,
-            balance_after,
-            reference_id,
-            description,
-            created_at
-        )
-        VALUES
-        (
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            NOW()
-        )
-        `,
-        [
-            userId,
-
-            "daily_bonus",
-
-            reward,
-
-            balanceBefore,
-
-            balanceAfter,
-
-            claim.id,
-
-            `Daily bonus day ${newStreak}`
-        ]
-    );
-
-
-    /*
-    --------------------------------------------------------
-    COMMIT
-    --------------------------------------------------------
-    */
-
-    await client.query(
-        "COMMIT"
-    );
-
-
-    return {
-
-        success: true,
-
-        reward: reward,
-
-        balance:
-            Number(
-                updatedUser.coins
-            ),
-
-        todayCoins:
-            Number(
-                updatedUser.today_coins
-            ),
-
-        streak:
-            Number(
-                updatedUser.daily_streak
-            ),
-
-        claimDate:
-            String(
-                updatedUser.last_daily_claim
-            ),
-
-        dayNumber:
-            newStreak
-
-    };
-
-} catch (error) {
-
-    await client.query(
-        "ROLLBACK"
-    );
-
-    throw error;
-
-} finally {
-
-    client.release();
-
-}
-
-}
-
-/*
-
-LUCKY ROLL
-
-POST /api/rewards/lucky-roll
-
-Request:
-
-{
-"adCompleted": true
-}
-
-The server generates the number.
-
-The browser CANNOT choose:
-
-99999
-10000
-reward amount
-roll number
-
-============================================================
-*/
-
-export async function luckyRoll(
-userId,
-adCompleted
-) {
-
-const client =
-    await pool.connect();
-
-try {
-
-    await client.query(
-        "BEGIN"
-    );
-
-
-    /*
-    --------------------------------------------------------
-    AD CHECK
-    --------------------------------------------------------
-    */
-
-    if (
-        adCompleted !== true
-    ) {
-
-        await client.query(
-            "ROLLBACK"
-        );
-
-        return {
-
-            success: false,
-
-            error:
-                "AD_REQUIRED",
-
-            message:
-                "You must complete the rewarded ad before Lucky Roll."
-
-        };
-
-    }
-
-
-    /*
-    --------------------------------------------------------
-    LOCK USER
-    --------------------------------------------------------
-    */
-
-    const userResult =
-        await client.query(
-            `
-            SELECT
-                id,
-                coins,
-                today_coins
-            FROM users
-            WHERE id = $1
-            FOR UPDATE
-            `,
-            [userId]
-        );
-
-
-    if (
-        userResult.rows.length === 0
-    ) {
-
-        throw new Error(
-            "User not found."
-        );
-
-    }
-
-
-    const user =
-        userResult.rows[0];
-
-
-    /*
-    --------------------------------------------------------
-    LOAD CONFIG
-    --------------------------------------------------------
-    */
-
-    const config =
-        await getLuckyRollConfig(
-            client
-        );
-
 
     const cooldownSeconds =
-        Math.max(
-            1,
-            Math.floor(
-                config.cooldownSeconds
-            )
-        );
+        Number.isSafeInteger(cooldownRaw) &&
+        cooldownRaw > 0
+            ? cooldownRaw
+            : DEFAULT_LUCKY_COOLDOWN_SECONDS;
 
+    let minimum =
+        Number.isSafeInteger(minimumRaw)
+            ? minimumRaw
+            : DEFAULT_LUCKY_MIN;
 
-    const minimum =
-        Math.max(
-            1,
-            Math.floor(
-                config.minimum
-            )
-        );
-
-
-    const maximum =
-        Math.min(
-            99999,
-            Math.floor(
-                config.maximum
-            )
-        );
+    let maximum =
+        Number.isSafeInteger(maximumRaw)
+            ? maximumRaw
+            : DEFAULT_LUCKY_MAX;
 
 
     /*
-    --------------------------------------------------------
-    GET LAST ROLL
-    --------------------------------------------------------
+    ---------------------------------------------------------
+    FORCE SAFE LUCKY RANGE
+    ---------------------------------------------------------
     */
 
-    const lastRollResult =
-        await client.query(
-            `
-            SELECT
-                id,
-                roll_number,
-                reward_coins,
-                rolled_at
-            FROM lucky_rolls
-            WHERE user_id = $1
-            ORDER BY rolled_at DESC
-            LIMIT 1
-            `,
-            [userId]
+    minimum = Math.max(
+        DEFAULT_LUCKY_MIN,
+        Math.min(
+            DEFAULT_LUCKY_MAX,
+            minimum
+        )
+    );
+
+    maximum = Math.max(
+        DEFAULT_LUCKY_MIN,
+        Math.min(
+            DEFAULT_LUCKY_MAX,
+            maximum
+        )
+    );
+
+
+    /*
+    If configuration is reversed,
+    use the complete valid range.
+    */
+
+    if (minimum > maximum) {
+        minimum = DEFAULT_LUCKY_MIN;
+        maximum = DEFAULT_LUCKY_MAX;
+    }
+
+
+    const rewards =
+        setting?.rewards &&
+        typeof setting.rewards === "object"
+            ? {
+                ...defaults,
+                ...setting.rewards
+            }
+            : defaults;
+
+
+    return {
+        cooldownSeconds,
+        minimum,
+        maximum,
+        rewards
+    };
+}
+
+
+/* =========================================================
+   CALCULATE LUCKY ROLL REWARD
+========================================================= */
+
+function calculateLuckyReward(
+    rollNumber,
+    rewards
+) {
+
+    const number = Number(
+        rollNumber
+    );
+
+
+    if (number === 99999) {
+        return safeReward(
+            rewards?.["99999"],
+            10000
         );
+    }
 
 
-    let nextRollAt = null;
+    if (number >= 99997) {
+        return safeReward(
+            rewards?.["99997"],
+            82
+        );
+    }
 
+
+    if (number >= 99500) {
+        return safeReward(
+            rewards?.["99500"],
+            18
+        );
+    }
+
+
+    if (number >= 95000) {
+        return safeReward(
+            rewards?.["95000"],
+            12
+        );
+    }
+
+
+    if (number >= 90000) {
+        return safeReward(
+            rewards?.["90000"],
+            8
+        );
+    }
+
+
+    return safeReward(
+        rewards?.default,
+        5
+    );
+}
+
+
+/* =========================================================
+   SAFE REWARD VALUE
+========================================================= */
+
+function safeReward(
+    value,
+    fallback
+) {
+
+    const number = Number(value);
 
     if (
-        lastRollResult.rows.length > 0
+        Number.isSafeInteger(number) &&
+        number >= 0
     ) {
+        return number;
+    }
 
-        const lastRoll =
-            lastRollResult.rows[0];
-
-
-        const lastRollTime =
-            new Date(
-                lastRoll.rolled_at
-            ).getTime();
+    return fallback;
+}
 
 
-        const nextTime =
-            lastRollTime +
-            (
-                cooldownSeconds *
-                1000
+/* =========================================================
+   DAILY BONUS
+========================================================= */
+
+export async function claimDailyBonus(
+    userId
+) {
+
+    const client = await pool.connect();
+
+    try {
+
+        await client.query("BEGIN");
+
+
+        /* -------------------------------------------------
+           LOCK USER
+        ------------------------------------------------- */
+
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    coins,
+                    today_coins,
+                    daily_streak,
+                    last_daily_claim
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [userId]
             );
 
 
-        const now =
-            Date.now();
+        if (userResult.rowCount === 0) {
+            throw new Error(
+                "USER_NOT_FOUND"
+            );
+        }
 
+
+        const user =
+            userResult.rows[0];
+
+
+        /* -------------------------------------------------
+           TODAY IN CAMBODIA
+        ------------------------------------------------- */
+
+        const today =
+            getPhnomPenhDate();
+
+
+        /* -------------------------------------------------
+           ALREADY CLAIMED
+        ------------------------------------------------- */
 
         if (
-            now < nextTime
+            user.last_daily_claim &&
+            String(
+                user.last_daily_claim
+            ) === today
         ) {
-
-            nextRollAt =
-                new Date(
-                    nextTime
-                );
-
-
-            const remainingSeconds =
-                Math.ceil(
-                    (
-                        nextTime -
-                        now
-                    ) /
-                    1000
-                );
-
 
             await client.query(
                 "ROLLBACK"
             );
 
-
             return {
-
                 success: false,
-
-                error:
-                    "COOLDOWN",
-
+                error: "ALREADY_CLAIMED",
                 message:
-                    "Lucky Roll is still on cooldown.",
-
-                remainingSeconds,
-
-                nextRollAt
-
+                    "Daily bonus has already been claimed today.",
+                coins:
+                    Number(user.coins),
+                streak:
+                    Number(user.daily_streak),
+                claimDate:
+                    today
             };
-
         }
 
-    }
+
+        /* -------------------------------------------------
+           GET REWARD
+        ------------------------------------------------- */
+
+        const reward =
+            await getDailyBonusAmount(
+                client
+            );
 
 
-    /*
-    --------------------------------------------------------
-    SERVER-SIDE RANDOM NUMBER
-    --------------------------------------------------------
-    */
-
-    const rollNumber =
-        crypto.randomInt(
-            minimum,
-            maximum + 1
-        );
+        if (reward <= 0) {
+            throw new Error(
+                "DAILY_BONUS_DISABLED"
+            );
+        }
 
 
-    /*
-    --------------------------------------------------------
-    CALCULATE SERVER-SIDE REWARD
-    --------------------------------------------------------
-    */
+        /* -------------------------------------------------
+           CALCULATE STREAK
+        ------------------------------------------------- */
 
-    const reward =
-        calculateLuckyReward(
-            rollNumber,
-            config.rewards
-        );
+        let newStreak = 1;
 
 
-    /*
-    --------------------------------------------------------
-    BALANCE BEFORE
-    --------------------------------------------------------
-    */
+        if (user.last_daily_claim) {
 
-    const balanceBefore =
-        Number(
-            user.coins
-        );
+            const previousDate =
+                new Date(
+                    `${String(
+                        user.last_daily_claim
+                    )}T00:00:00+07:00`
+                );
 
-
-    const balanceAfter =
-        balanceBefore +
-        reward;
+            const currentDate =
+                new Date(
+                    `${today}T00:00:00+07:00`
+                );
 
 
-    /*
-    --------------------------------------------------------
-    INSERT LUCKY ROLL
-    --------------------------------------------------------
-    */
+            const difference =
+                Math.floor(
+                    (
+                        currentDate.getTime() -
+                        previousDate.getTime()
+                    ) /
+                    86400000
+                );
 
-    const rollResult =
+
+            if (difference === 1) {
+
+                newStreak =
+                    Math.min(
+                        7,
+                        Number(
+                            user.daily_streak
+                        ) + 1
+                    );
+            }
+        }
+
+
+        /* -------------------------------------------------
+           BALANCES
+        ------------------------------------------------- */
+
+        const balanceBefore =
+            Number(user.coins);
+
+        const balanceAfter =
+            balanceBefore + reward;
+
+
+        /* -------------------------------------------------
+           CLAIM RECORD
+        ------------------------------------------------- */
+
+        const claimResult =
+            await client.query(
+                `
+                INSERT INTO daily_bonus_claims
+                (
+                    user_id,
+                    claim_date,
+                    day_number,
+                    reward_coins,
+                    created_at
+                )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    NOW()
+                )
+                RETURNING
+                    id,
+                    claim_date,
+                    day_number,
+                    reward_coins,
+                    created_at
+                `,
+                [
+                    userId,
+                    today,
+                    newStreak,
+                    reward
+                ]
+            );
+
+
+        const claim =
+            claimResult.rows[0];
+
+
+        /* -------------------------------------------------
+           UPDATE USER
+        ------------------------------------------------- */
+
+        const userUpdate =
+            await client.query(
+                `
+                UPDATE users
+                SET
+                    coins = coins + $1,
+                    today_coins = today_coins + $1,
+                    daily_streak = $2,
+                    last_daily_claim = $3,
+                    updated_at = NOW()
+                WHERE id = $4
+                RETURNING
+                    coins,
+                    today_coins,
+                    daily_streak,
+                    last_daily_claim
+                `,
+                [
+                    reward,
+                    newStreak,
+                    today,
+                    userId
+                ]
+            );
+
+
+        if (userUpdate.rowCount === 0) {
+            throw new Error(
+                "USER_UPDATE_FAILED"
+            );
+        }
+
+
+        const updatedUser =
+            userUpdate.rows[0];
+
+
+        /* -------------------------------------------------
+           COIN TRANSACTION
+        ------------------------------------------------- */
+
         await client.query(
             `
-            INSERT INTO lucky_rolls
+            INSERT INTO coin_transactions
             (
                 user_id,
-                roll_number,
-                reward_coins,
-                ad_required,
-                ad_completed,
-                rolled_at
+                type,
+                amount,
+                balance_before,
+                balance_after,
+                reference_id,
+                description,
+                created_at
             )
             VALUES
             (
                 $1,
+                'daily_bonus',
                 $2,
                 $3,
-                TRUE,
-                TRUE,
+                $4,
+                $5,
+                $6,
                 NOW()
             )
-            RETURNING
-                id,
-                roll_number,
-                reward_coins,
-                ad_required,
-                ad_completed,
-                rolled_at
             `,
             [
                 userId,
-                rollNumber,
-                reward
-            ]
-        );
-
-
-    const roll =
-        rollResult.rows[0];
-
-
-    /*
-    --------------------------------------------------------
-    UPDATE USER BALANCE
-    --------------------------------------------------------
-    */
-
-    const updatedResult =
-        await client.query(
-            `
-            UPDATE users
-            SET
-                coins =
-                    coins + $1,
-
-                today_coins =
-                    today_coins + $1
-
-            WHERE id = $2
-
-            RETURNING
-                coins,
-                today_coins
-            `,
-            [
                 reward,
-                userId
+                balanceBefore,
+                balanceAfter,
+                claim.id,
+                `Daily bonus day ${newStreak}`
             ]
         );
 
 
-    if (
-        updatedResult.rows.length === 0
-    ) {
-
-        throw new Error(
-            "Unable to update user balance."
-        );
-
-    }
+        await client.query("COMMIT");
 
 
-    const updatedUser =
-        updatedResult.rows[0];
-
-
-    /*
-    --------------------------------------------------------
-    RECORD COIN TRANSACTION
-    --------------------------------------------------------
-    */
-
-    await client.query(
-        `
-        INSERT INTO coin_transactions
-        (
-            user_id,
-            type,
-            amount,
-            balance_before,
-            balance_after,
-            reference_id,
-            description,
-            created_at
-        )
-        VALUES
-        (
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            NOW()
-        )
-        `,
-        [
-            userId,
-
-            "lucky_roll",
-
+        return {
+            success: true,
             reward,
-
-            balanceBefore,
-
-            Number(
-                updatedUser.coins
-            ),
-
-            roll.id,
-
-            `Lucky Roll ${rollNumber}`
-        ]
-    );
-
-
-    /*
-    --------------------------------------------------------
-    COMMIT
-    --------------------------------------------------------
-    */
-
-    await client.query(
-        "COMMIT"
-    );
-
-
-    const nextRoll =
-        new Date(
-            new Date(
-                roll.rolled_at
-            ).getTime() +
-            (
-                cooldownSeconds *
-                1000
-            )
-        );
-
-
-    return {
-
-        success: true,
-
-        roll: {
-
-            id:
-                roll.id,
-
-            number:
-                Number(
-                    roll.roll_number
+            balance:
+                Number(updatedUser.coins),
+            todayCoins:
+                Number(updatedUser.today_coins),
+            streak:
+                Number(updatedUser.daily_streak),
+            claimDate:
+                String(
+                    updatedUser.last_daily_claim
                 ),
+            dayNumber:
+                newStreak
+        };
 
-            reward:
-                Number(
-                    roll.reward_coins
-                ),
 
-            rolledAt:
-                roll.rolled_at
+    } catch (error) {
 
-        },
+        try {
+            await client.query("ROLLBACK");
+        } catch {
+            // Ignore rollback errors.
+        }
 
-        balance:
-            Number(
-                updatedUser.coins
-            ),
+        throw error;
 
-        todayCoins:
-            Number(
-                updatedUser.today_coins
-            ),
+    } finally {
 
-        cooldownSeconds,
-
-        nextRollAt:
-            nextRoll
-
-    };
-
-} catch (error) {
-
-    await client.query(
-        "ROLLBACK"
-    );
-
-    throw error;
-
-} finally {
-
-    client.release();
-
+        client.release();
+    }
 }
 
-}
 
-/*
+/* =========================================================
+   LUCKY ROLL
+========================================================= */
 
-GET REWARD STATUS
-
-Useful for the frontend.
-
-Returns:
-
-- daily bonus status
-- daily streak
-- lucky roll cooldown
-- next lucky roll time
-
-============================================================
-*/
-
-export async function getRewardStatus(
-userId
+export async function luckyRoll(
+    userId,
+    adCompleted
 ) {
 
-const client =
-    await pool.connect();
+    const client = await pool.connect();
 
-try {
+    try {
 
-    const today =
-        getPhnomPenhDate();
+        await client.query("BEGIN");
 
 
-    /*
-    --------------------------------------------------------
-    USER
-    --------------------------------------------------------
-    */
+        /* -------------------------------------------------
+           TEMPORARY AD GATE
+        -------------------------------------------------
 
-    const userResult =
-        await client.query(
-            `
-            SELECT
-                coins,
-                today_coins,
-                daily_streak,
-                last_daily_claim
-            FROM users
-            WHERE id = $1
-            LIMIT 1
-            `,
-            [userId]
-        );
+        IMPORTANT:
+        This does NOT verify AdsGram.
 
+        It only keeps the existing API contract working.
 
-    if (
-        userResult.rows.length === 0
-    ) {
+        Production must replace this with a verified
+        server-side ad reward.
+        ------------------------------------------------- */
 
-        throw new Error(
-            "User not found."
-        );
+        if (adCompleted !== true) {
 
-    }
+            await client.query(
+                "ROLLBACK"
+            );
+
+            return {
+                success: false,
+                error: "AD_REQUIRED",
+                message:
+                    "You must complete the rewarded ad before Lucky Roll."
+            };
+        }
 
 
-    const user =
-        userResult.rows[0];
+        /* -------------------------------------------------
+           LOCK USER
+        ------------------------------------------------- */
 
-
-    /*
-    --------------------------------------------------------
-    DAILY STATUS
-    --------------------------------------------------------
-    */
-
-    const dailyClaimed =
-        user.last_daily_claim &&
-        String(
-            user.last_daily_claim
-        ) === today;
-
-
-    /*
-    --------------------------------------------------------
-    LAST LUCKY ROLL
-    --------------------------------------------------------
-    */
-
-    const luckyResult =
-        await client.query(
-            `
-            SELECT
-                rolled_at
-            FROM lucky_rolls
-            WHERE user_id = $1
-            ORDER BY rolled_at DESC
-            LIMIT 1
-            `,
-            [userId]
-        );
-
-
-    const config =
-        await getLuckyRollConfig(
-            client
-        );
-
-
-    let luckyAvailable =
-        true;
-
-    let nextRollAt =
-        null;
-
-    let remainingSeconds =
-        0;
-
-
-    if (
-        luckyResult.rows.length > 0
-    ) {
-
-        const lastRollAt =
-            new Date(
-                luckyResult.rows[0].rolled_at
-            ).getTime();
-
-
-        const nextTime =
-            lastRollAt +
-            (
-                Number(
-                    config.cooldownSeconds
-                ) *
-                1000
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    coins,
+                    today_coins
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [userId]
             );
 
 
-        const remaining =
-            nextTime -
-            Date.now();
+        if (userResult.rowCount === 0) {
+            throw new Error(
+                "USER_NOT_FOUND"
+            );
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        /* -------------------------------------------------
+           LOAD CONFIG
+        ------------------------------------------------- */
+
+        const config =
+            await getLuckyRollConfig(
+                client
+            );
+
+
+        const {
+            cooldownSeconds,
+            minimum,
+            maximum,
+            rewards
+        } = config;
+
+
+        /* -------------------------------------------------
+           LAST ROLL
+        ------------------------------------------------- */
+
+        const lastRollResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    roll_number,
+                    reward_coins,
+                    rolled_at
+                FROM lucky_rolls
+                WHERE user_id = $1
+                ORDER BY rolled_at DESC
+                LIMIT 1
+                `,
+                [userId]
+            );
+
+
+        let nextRollAt = null;
 
 
         if (
-            remaining > 0
+            lastRollResult.rowCount > 0
         ) {
 
-            luckyAvailable =
-                false;
+            const lastRoll =
+                lastRollResult.rows[0];
 
-            remainingSeconds =
-                Math.ceil(
-                    remaining /
-                    1000
-                );
 
-            nextRollAt =
+            const lastRollTime =
                 new Date(
-                    nextTime
+                    lastRoll.rolled_at
+                ).getTime();
+
+
+            const nextTime =
+                lastRollTime +
+                cooldownSeconds * 1000;
+
+
+            const now =
+                Date.now();
+
+
+            if (now < nextTime) {
+
+                nextRollAt =
+                    new Date(nextTime);
+
+
+                const remainingSeconds =
+                    Math.ceil(
+                        (
+                            nextTime - now
+                        ) / 1000
+                    );
+
+
+                await client.query(
+                    "ROLLBACK"
                 );
 
+
+                return {
+                    success: false,
+                    error: "COOLDOWN",
+                    message:
+                        "Lucky Roll is still on cooldown.",
+                    remainingSeconds,
+                    nextRollAt
+                };
+            }
         }
 
-    }
+
+        /* -------------------------------------------------
+           SERVER-SIDE RANDOM NUMBER
+        ------------------------------------------------- */
+
+        const rollNumber =
+            crypto.randomInt(
+                minimum,
+                maximum + 1
+            );
 
 
-    return {
+        /* -------------------------------------------------
+           SERVER-SIDE REWARD
+        ------------------------------------------------- */
 
-        success: true,
+        const reward =
+            calculateLuckyReward(
+                rollNumber,
+                rewards
+            );
 
-        balance:
-            Number(
-                user.coins
-            ),
 
-        todayCoins:
-            Number(
-                user.today_coins
-            ),
+        if (
+            !Number.isSafeInteger(reward) ||
+            reward < 0
+        ) {
+            throw new Error(
+                "INVALID_LUCKY_REWARD"
+            );
+        }
 
-        dailyBonus: {
 
-            reward:
-                await getDailyBonusAmount(
-                    client
-                ),
+        /* -------------------------------------------------
+           BALANCES
+        ------------------------------------------------- */
 
-            claimed:
-                Boolean(
-                    dailyClaimed
-                ),
+        const balanceBefore =
+            Number(user.coins);
 
-            streak:
-                Number(
-                    user.daily_streak
+        const balanceAfter =
+            balanceBefore + reward;
+
+
+        /* -------------------------------------------------
+           SAVE ROLL
+        ------------------------------------------------- */
+
+        const rollResult =
+            await client.query(
+                `
+                INSERT INTO lucky_rolls
+                (
+                    user_id,
+                    roll_number,
+                    reward_coins,
+                    ad_required,
+                    ad_completed,
+                    rolled_at
                 )
+                VALUES
+                (
+                    $1,
+                    $2,
+                    $3,
+                    TRUE,
+                    TRUE,
+                    NOW()
+                )
+                RETURNING
+                    id,
+                    roll_number,
+                    reward_coins,
+                    ad_required,
+                    ad_completed,
+                    rolled_at
+                `,
+                [
+                    userId,
+                    rollNumber,
+                    reward
+                ]
+            );
 
-        },
 
-        luckyRoll: {
+        const roll =
+            rollResult.rows[0];
 
-            available:
-                luckyAvailable,
 
-            cooldownSeconds:
-                Number(
-                    config.cooldownSeconds
-                ),
+        /* -------------------------------------------------
+           UPDATE USER
+        ------------------------------------------------- */
 
-            remainingSeconds,
+        const updatedResult =
+            await client.query(
+                `
+                UPDATE users
+                SET
+                    coins = coins + $1,
+                    today_coins = today_coins + $1,
+                    updated_at = NOW()
+                WHERE id = $2
+                RETURNING
+                    coins,
+                    today_coins
+                `,
+                [
+                    reward,
+                    userId
+                ]
+            );
 
-            nextRollAt
 
+        if (updatedResult.rowCount === 0) {
+            throw new Error(
+                "USER_UPDATE_FAILED"
+            );
         }
 
-    };
 
-} finally {
+        const updatedUser =
+            updatedResult.rows[0];
 
-    client.release();
 
+        /* -------------------------------------------------
+           COIN TRANSACTION
+        ------------------------------------------------- */
+
+        await client.query(
+            `
+            INSERT INTO coin_transactions
+            (
+                user_id,
+                type,
+                amount,
+                balance_before,
+                balance_after,
+                reference_id,
+                description,
+                created_at
+            )
+            VALUES
+            (
+                $1,
+                'lucky_roll',
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                NOW()
+            )
+            `,
+            [
+                userId,
+                reward,
+                balanceBefore,
+                Number(
+                    updatedUser.coins
+                ),
+                roll.id,
+                `Lucky Roll ${rollNumber}`
+            ]
+        );
+
+
+        await client.query("COMMIT");
+
+
+        const nextRoll =
+            new Date(
+                new Date(
+                    roll.rolled_at
+                ).getTime() +
+                cooldownSeconds * 1000
+            );
+
+
+        return {
+            success: true,
+
+            roll: {
+                id: roll.id,
+
+                number:
+                    Number(
+                        roll.roll_number
+                    ),
+
+                reward:
+                    Number(
+                        roll.reward_coins
+                    ),
+
+                rolledAt:
+                    roll.rolled_at
+            },
+
+            balance:
+                Number(
+                    updatedUser.coins
+                ),
+
+            todayCoins:
+                Number(
+                    updatedUser.today_coins
+                ),
+
+            cooldownSeconds,
+
+            nextRollAt:
+                nextRoll
+        };
+
+
+    } catch (error) {
+
+        try {
+            await client.query(
+                "ROLLBACK"
+            );
+        } catch {
+            // Ignore rollback errors.
+        }
+
+        throw error;
+
+    } finally {
+
+        client.release();
+    }
 }
 
+
+/* =========================================================
+   REWARD STATUS
+========================================================= */
+
+export async function getRewardStatus(
+    userId
+) {
+
+    const client = await pool.connect();
+
+    try {
+
+        const today =
+            getPhnomPenhDate();
+
+
+        /* -------------------------------------------------
+           USER
+        ------------------------------------------------- */
+
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    coins,
+                    today_coins,
+                    daily_streak,
+                    last_daily_claim
+                FROM users
+                WHERE id = $1
+                LIMIT 1
+                `,
+                [userId]
+            );
+
+
+        if (userResult.rowCount === 0) {
+            throw new Error(
+                "USER_NOT_FOUND"
+            );
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        /* -------------------------------------------------
+           DAILY STATUS
+        ------------------------------------------------- */
+
+        const dailyClaimed =
+            Boolean(
+                user.last_daily_claim &&
+                String(
+                    user.last_daily_claim
+                ) === today
+            );
+
+
+        /* -------------------------------------------------
+           LUCKY STATUS
+        ------------------------------------------------- */
+
+        const luckyResult =
+            await client.query(
+                `
+                SELECT
+                    rolled_at
+                FROM lucky_rolls
+                WHERE user_id = $1
+                ORDER BY rolled_at DESC
+                LIMIT 1
+                `,
+                [userId]
+            );
+
+
+        const config =
+            await getLuckyRollConfig(
+                client
+            );
+
+
+        const cooldownSeconds =
+            config.cooldownSeconds;
+
+
+        let luckyAvailable = true;
+
+        let nextRollAt = null;
+
+        let remainingSeconds = 0;
+
+
+        if (
+            luckyResult.rowCount > 0
+        ) {
+
+            const lastRollAt =
+                new Date(
+                    luckyResult.rows[0].rolled_at
+                ).getTime();
+
+
+            const nextTime =
+                lastRollAt +
+                cooldownSeconds * 1000;
+
+
+            const remaining =
+                nextTime -
+                Date.now();
+
+
+            if (remaining > 0) {
+
+                luckyAvailable = false;
+
+                remainingSeconds =
+                    Math.ceil(
+                        remaining / 1000
+                    );
+
+                nextRollAt =
+                    new Date(nextTime);
+            }
+        }
+
+
+        return {
+            success: true,
+
+            balance:
+                Number(user.coins),
+
+            todayCoins:
+                Number(user.today_coins),
+
+            dailyBonus: {
+
+                reward:
+                    await getDailyBonusAmount(
+                        client
+                    ),
+
+                claimed:
+                    dailyClaimed,
+
+                streak:
+                    Number(
+                        user.daily_streak
+                    )
+            },
+
+            luckyRoll: {
+
+                available:
+                    luckyAvailable,
+
+                cooldownSeconds,
+
+                remainingSeconds,
+
+                nextRollAt
+            }
+        };
+
+
+    } finally {
+
+        client.release();
+    }
 }
