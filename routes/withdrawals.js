@@ -11,30 +11,45 @@ const router = express.Router();
 
 /* =========================================================
    CREATE WITHDRAWAL
-=========================================================
 
-POST /api/withdrawals
+   POST /api/withdrawals
 
-Body:
-{
-  "amountCoins": 2500,
-  "faucetpayEmail": "user@example.com"
-}
+   FaucetPay:
+   {
+     "amountCoins": 2500,
+     "provider": "faucetpay",
+     "faucetpayEmail": "user@example.com"
+   }
 
+   ABA:
+   {
+     "amountCoins": 2500,
+     "provider": "aba",
+     "abaAccountNumber": "123456789",
+     "abaAccountName": "YOUR FULL NAME"
+   }
 ========================================================= */
 
 router.post("/", async (req, res) => {
   try {
     const {
       amountCoins,
-      faucetpayEmail
+      provider,
+      faucetpayEmail,
+      abaAccountNumber,
+      abaAccountName
     } = req.body;
 
     const withdrawal =
       await createWithdrawal(
         req.user.user_id,
         amountCoins,
-        faucetpayEmail
+        provider,
+        {
+          faucetpayEmail,
+          abaAccountNumber,
+          abaAccountName
+        }
       );
 
     return res.status(201).json({
@@ -51,10 +66,12 @@ router.post("/", async (req, res) => {
     );
 
     switch (error.message) {
+
       case "INVALID_AMOUNT":
         return res.status(400).json({
           success: false,
-          error: "Invalid withdrawal amount."
+          error:
+            "Invalid withdrawal amount."
         });
 
       case "MINIMUM_WITHDRAWAL":
@@ -64,6 +81,13 @@ router.post("/", async (req, res) => {
             `Minimum withdrawal is ${WITHDRAWAL_CONFIG.minimumCoins} coins.`
         });
 
+      case "INVALID_PROVIDER":
+        return res.status(400).json({
+          success: false,
+          error:
+            "Invalid withdrawal method. Choose FaucetPay or ABA Bank."
+        });
+
       case "INVALID_EMAIL":
         return res.status(400).json({
           success: false,
@@ -71,22 +95,39 @@ router.post("/", async (req, res) => {
             "Please enter a valid FaucetPay email."
         });
 
+      case "INVALID_ABA_ACCOUNT":
+        return res.status(400).json({
+          success: false,
+          error:
+            "Please enter a valid ABA account number."
+        });
+
+      case "INVALID_ABA_NAME":
+        return res.status(400).json({
+          success: false,
+          error:
+            "Please enter a valid ABA account holder name."
+        });
+
       case "USER_NOT_FOUND":
         return res.status(404).json({
           success: false,
-          error: "User not found."
+          error:
+            "User not found."
         });
 
       case "ACCOUNT_BLOCKED":
         return res.status(403).json({
           success: false,
-          error: "Your account is blocked."
+          error:
+            "Your account is blocked."
         });
 
       case "INSUFFICIENT_BALANCE":
         return res.status(400).json({
           success: false,
-          error: "Insufficient coin balance."
+          error:
+            "Insufficient coin balance."
         });
 
       case "WITHDRAWAL_PENDING":
@@ -108,13 +149,8 @@ router.post("/", async (req, res) => {
 
 /* =========================================================
    GET USER WITHDRAWAL HISTORY
-=========================================================
 
-GET /api/withdrawals
-
-Optional:
-?limit=20&offset=0
-
+   GET /api/withdrawals?limit=20&offset=0
 ========================================================= */
 
 router.get("/", async (req, res) => {
@@ -165,10 +201,8 @@ router.get("/", async (req, res) => {
 
 /* =========================================================
    GET SINGLE WITHDRAWAL
-=========================================================
 
-GET /api/withdrawals/:id
-
+   GET /api/withdrawals/:id
 ========================================================= */
 
 router.get("/:id", async (req, res) => {
@@ -196,7 +230,8 @@ router.get("/:id", async (req, res) => {
     ) {
       return res.status(404).json({
         success: false,
-        error: "Withdrawal not found."
+        error:
+          "Withdrawal not found."
       });
     }
 
