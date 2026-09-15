@@ -1,21 +1,18 @@
 import crypto from "crypto";
-
 import pool from "../db/pool.js";
 
 
 function hashToken(token) {
-
     return crypto
         .createHash("sha256")
         .update(token)
         .digest("hex");
-
 }
 
 
 /*
 ============================================================
-Require authenticated session
+REQUIRE AUTHENTICATED SESSION
 ============================================================
 */
 
@@ -30,6 +27,12 @@ export async function requireAuth(
         const header =
             req.headers.authorization;
 
+
+        /*
+        --------------------------------------------------------
+        Check Authorization header
+        --------------------------------------------------------
+        */
 
         if (
             !header ||
@@ -58,9 +61,21 @@ export async function requireAuth(
         }
 
 
+        /*
+        --------------------------------------------------------
+        Hash session token
+        --------------------------------------------------------
+        */
+
         const tokenHash =
             hashToken(token);
 
+
+        /*
+        --------------------------------------------------------
+        Find session + user
+        --------------------------------------------------------
+        */
 
         const result =
             await pool.query(
@@ -68,36 +83,56 @@ export async function requireAuth(
                 SELECT
                     s.id AS session_id,
                     s.user_id,
+
+                    u.id AS id,
+
                     u.telegram_id,
                     u.username,
                     u.first_name,
                     u.last_name,
                     u.photo_url,
+
                     u.coins,
                     u.today_coins,
+
                     u.games_played,
                     u.easy_games,
                     u.medium_games,
                     u.hard_games,
+
                     u.easy_level,
                     u.medium_level,
                     u.hard_level,
+
                     u.lives,
                     u.daily_streak,
                     u.last_daily_claim,
+
                     u.is_blocked
+
                 FROM auth_sessions s
+
                 JOIN users u
                     ON u.id = s.user_id
+
                 WHERE s.token_hash = $1
                   AND s.expires_at > NOW()
+
                 LIMIT 1
                 `,
                 [tokenHash]
             );
 
 
-        if (result.rowCount === 0) {
+        /*
+        --------------------------------------------------------
+        Session not found
+        --------------------------------------------------------
+        */
+
+        if (
+            result.rowCount === 0
+        ) {
 
             return res.status(401).json({
                 success: false,
@@ -111,6 +146,12 @@ export async function requireAuth(
             result.rows[0];
 
 
+        /*
+        --------------------------------------------------------
+        Check blocked account
+        --------------------------------------------------------
+        */
+
         if (user.is_blocked) {
 
             return res.status(403).json({
@@ -121,28 +162,82 @@ export async function requireAuth(
         }
 
 
+        /*
+        --------------------------------------------------------
+        Update session usage
+        --------------------------------------------------------
+        */
+
         await pool.query(
             `
             UPDATE auth_sessions
+
             SET last_used_at = NOW()
+
             WHERE id = $1
             `,
-            [user.session_id]
+            [
+                user.session_id
+            ]
         );
 
+
+        /*
+        --------------------------------------------------------
+        Update user's last seen time
+        --------------------------------------------------------
+        */
 
         await pool.query(
             `
             UPDATE users
+
             SET last_seen_at = NOW()
+
             WHERE id = $1
             `,
-            [user.user_id]
+            [
+                user.user_id
+            ]
         );
 
 
-        req.user = user;
+        /*
+        --------------------------------------------------------
+        IMPORTANT FIX
+        --------------------------------------------------------
 
+        The backend previously provided:
+
+            req.user.user_id
+
+        while some routes use:
+
+            req.user.id
+
+        We now provide BOTH.
+
+        --------------------------------------------------------
+        */
+
+        req.user = {
+
+            ...user,
+
+            id:
+                user.user_id,
+
+            user_id:
+                user.user_id
+
+        };
+
+
+        /*
+        --------------------------------------------------------
+        Continue to protected route
+        --------------------------------------------------------
+        */
 
         next();
 
@@ -154,7 +249,8 @@ export async function requireAuth(
             error
         );
 
-        res.status(500).json({
+
+        return res.status(500).json({
             success: false,
             error: "Authentication error"
         });
