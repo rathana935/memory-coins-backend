@@ -31,10 +31,37 @@ router.get("/status", async (req, res) => {
 
     try {
 
+        /*
+        IMPORTANT:
+        Use req.user.user_id from auth middleware.
+
+        The authentication middleware stores the
+        PostgreSQL users.id value here.
+        */
+
+        const userId =
+            req.user.user_id;
+
+
+        if (!userId) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "Authenticated user ID is missing."
+
+            });
+
+        }
+
+
         const result =
             await getGameStatus(
-                req.user.id
+                userId
             );
+
 
         return res.json(result);
 
@@ -45,11 +72,13 @@ router.get("/status", async (req, res) => {
             error
         );
 
+
         return res.status(500).json({
 
             success: false,
 
             message:
+                error.message ||
                 "Unable to load game status."
 
         });
@@ -86,6 +115,28 @@ router.post("/start", async (req, res) => {
 
     try {
 
+        /*
+        Get authenticated PostgreSQL user ID.
+        */
+
+        const userId =
+            req.user.user_id;
+
+
+        if (!userId) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "Authenticated user ID is missing."
+
+            });
+
+        }
+
+
         const {
             difficulty
         } = req.body;
@@ -105,10 +156,40 @@ router.post("/start", async (req, res) => {
         }
 
 
+        /*
+        Validate difficulty before sending
+        it to the game service.
+        */
+
+        const allowedDifficulties = [
+            "easy",
+            "medium",
+            "hard"
+        ];
+
+
+        if (
+            !allowedDifficulties.includes(
+                String(difficulty).toLowerCase()
+            )
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Invalid difficulty. Use easy, medium, or hard."
+
+            });
+
+        }
+
+
         const result =
             await startGame(
-                req.user.id,
-                difficulty
+                userId,
+                String(difficulty).toLowerCase()
             );
 
 
@@ -190,6 +271,28 @@ router.post("/complete", async (req, res) => {
 
     try {
 
+        /*
+        Get authenticated PostgreSQL user ID.
+        */
+
+        const userId =
+            req.user.user_id;
+
+
+        if (!userId) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "Authenticated user ID is missing."
+
+            });
+
+        }
+
+
         const {
             gameId,
             completionToken,
@@ -229,8 +332,7 @@ router.post("/complete", async (req, res) => {
         const result =
             await completeGame({
 
-                userId:
-                    req.user.id,
+                userId,
 
                 gameId,
 
