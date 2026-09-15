@@ -1,5 +1,5 @@
 -- ============================================================
--- MEMORY COINS
+-- MEMORY CARD
 -- Production Database Fixes
 -- Migration: 002
 --
@@ -12,7 +12,6 @@ BEGIN;
 
 /* ============================================================
    1. USERS
-   Ensure required columns exist.
 ============================================================ */
 
 ALTER TABLE users
@@ -68,7 +67,7 @@ WHERE last_seen_at IS NULL;
 
 
 /* ============================================================
-   3. USERS CHECK CONSTRAINTS
+   3. USERS CHECK CONSTRAINT
 ============================================================ */
 
 DO $$
@@ -147,7 +146,7 @@ $$;
 
 
 /* ============================================================
-   7. WITHDRAWAL SAFETY
+   7. WITHDRAWAL INDEXES
 ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user
@@ -164,7 +163,45 @@ ON withdrawals(requested_at DESC);
 
 
 /* ============================================================
-   8. PREVENT MULTIPLE ACTIVE WITHDRAWALS
+   8. CHECK FOR DUPLICATE ACTIVE WITHDRAWALS
+============================================================
+
+   We do NOT automatically delete or cancel withdrawals.
+
+   If duplicates exist, the migration stops safely and shows
+   which user has multiple active withdrawals.
+
+============================================================ */
+
+DO $$
+DECLARE
+    duplicate_count INTEGER;
+BEGIN
+
+    SELECT COUNT(*)
+    INTO duplicate_count
+    FROM (
+        SELECT user_id
+        FROM withdrawals
+        WHERE status IN ('pending', 'processing')
+        GROUP BY user_id
+        HAVING COUNT(*) > 1
+    ) duplicates;
+
+    IF duplicate_count > 0 THEN
+
+        RAISE EXCEPTION
+            'Migration 002 stopped: % user(s) have multiple pending/processing withdrawals. Review withdrawals before creating idx_one_active_withdrawal_per_user.',
+            duplicate_count;
+
+    END IF;
+
+END
+$$;
+
+
+/* ============================================================
+   9. PREVENT MULTIPLE ACTIVE WITHDRAWALS
 ============================================================ */
 
 CREATE UNIQUE INDEX IF NOT EXISTS
@@ -177,7 +214,7 @@ WHERE status IN (
 
 
 /* ============================================================
-   9. COIN TRANSACTION INDEXES
+   10. COIN TRANSACTION INDEXES
 ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_transactions_user
@@ -191,7 +228,7 @@ ON coin_transactions(type);
 
 
 /* ============================================================
-   10. REFERRAL INDEXES
+   11. REFERRAL INDEXES
 ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_referrals_referrer
@@ -202,7 +239,7 @@ ON referrals(referred_user_id);
 
 
 /* ============================================================
-   11. AUTH SESSION INDEXES
+   12. AUTH SESSION INDEXES
 ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
@@ -213,7 +250,7 @@ ON auth_sessions(expires_at);
 
 
 /* ============================================================
-   12. LUCKY ROLL INDEXES
+   13. LUCKY ROLL INDEXES
 ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_lucky_rolls_user
@@ -227,20 +264,6 @@ ON lucky_rolls(
     user_id,
     rolled_at DESC
 );
-
-
-/* ============================================================
-   13. LEADERBOARD
-============================================================
-
-   Existing leaderboard_scores may have period_start
-   defined as nullable in the original schema.
-
-   The current leaderboard service does not depend on
-   this table, so we do NOT force a NOT NULL conversion
-   here. This avoids breaking existing rows.
-
-============================================================ */
 
 
 /* ============================================================
