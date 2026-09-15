@@ -3,7 +3,7 @@ import pool from "../db/pool.js";
 
 /*
 ============================================================
-MEMORY CARD / MEMORY COINS - GAME SERVICE
+MEMORY CARD - GAME SERVICE
 ============================================================
 
 GAME RULES
@@ -12,25 +12,27 @@ Easy:
 - 2 x 4 cards
 - 4 pairs
 - 10 coins
+- 100 games
 
 Medium:
 - 3 x 4 cards
 - 6 pairs
 - 12 coins
+- 100 games
 
 Hard:
 - 4 x 4 cards
 - 8 pairs
 - 15 coins
+- 100 games
 
 LIVES
 ------------------------------------------------------------
 - Maximum 5 lives
 - Starting a game consumes 1 life
 - 1 life regenerates every 60 minutes
-- Server controls life regeneration
-- Remaining cooldown time is preserved
-- Frontend receives exact countdown information
+- Server controls regeneration
+- Remaining cooldown is preserved
 
 SECURITY
 ------------------------------------------------------------
@@ -38,10 +40,11 @@ SECURITY
 - Server controls game sessions
 - Server generates completion token
 - Duplicate completion blocked
-- Balance updates transactional
+- Balance updates are transactional
 - Client cannot request 2x reward
-- Ad rewards will be handled separately through
-  server-side verified AdsGram integration
+- Ads are NOT trusted from the client
+- Double reward will be handled separately
+  through verified ad logic
 ============================================================
 */
 
@@ -75,21 +78,24 @@ const GAME_CONFIG = {
         rows: 2,
         cols: 4,
         pairs: 4,
-        reward: 10
+        reward: 10,
+        maxGames: 100
     },
 
     medium: {
         rows: 3,
         cols: 4,
         pairs: 6,
-        reward: 12
+        reward: 12,
+        maxGames: 100
     },
 
     hard: {
         rows: 4,
         cols: 4,
         pairs: 8,
-        reward: 15
+        reward: 15,
+        maxGames: 100
     }
 
 };
@@ -182,36 +188,29 @@ function calculateSecondsUntil(date) {
 RECOVER LIVES
 ============================================================
 
-IMPORTANT
-
-last_life_at represents the beginning of the
-current regeneration chain.
-
-Example:
+Rules:
 
 5 lives
 ↓
 start game
 ↓
 4 lives
-last_life_at = NOW()
+↓
+60 minutes
+↓
+5 lives
 
-After 60 minutes:
-
-4 → 5
-last_life_at = NULL
-
-
-Example:
+If several hours pass:
 
 1 life
-last_life_at = 3 hours ago
+↓
+3 hours later
+↓
+4 lives
+↓
+remaining cooldown preserved
 
-3 hours elapsed:
-
-1 + 3 = 4 lives
-
-The remaining recovery time is preserved.
+The server is always authoritative.
 ============================================================
 */
 
@@ -277,7 +276,7 @@ export async function recoverLives(
 
     /*
     --------------------------------------------------------
-    ALREADY FULL
+    FULL LIVES
     --------------------------------------------------------
     */
 
@@ -339,7 +338,7 @@ export async function recoverLives(
 
     /*
     --------------------------------------------------------
-    CURRENT TIME
+    PARSE TIMESTAMP
     --------------------------------------------------------
     */
 
@@ -348,13 +347,14 @@ export async function recoverLives(
             user.last_life_at
         );
 
+
     const now =
         new Date();
 
 
     /*
     --------------------------------------------------------
-    INVALID DATABASE DATE
+    INVALID DATE PROTECTION
     --------------------------------------------------------
     */
 
@@ -363,6 +363,13 @@ export async function recoverLives(
             lastLifeAt.getTime()
         )
     ) {
+
+        const nextLifeAt =
+            new Date(
+                Date.now() +
+                LIFE_COOLDOWN_MS
+            );
+
 
         await client.query(
             `
@@ -374,13 +381,6 @@ export async function recoverLives(
             `,
             [userId]
         );
-
-
-        const nextLifeAt =
-            new Date(
-                Date.now() +
-                LIFE_COOLDOWN_MS
-            );
 
 
         return {
@@ -453,7 +453,7 @@ export async function recoverLives(
 
     /*
     --------------------------------------------------------
-    NOTHING RECOVERED YET
+    NOTHING RECOVERED
     --------------------------------------------------------
     */
 
@@ -542,16 +542,14 @@ export async function recoverLives(
 
     Example:
 
-    lastLifeAt = 2 hours 20 minutes ago
+    last_life_at = 2h20m ago
 
-    Recover:
-    +2 lives
+    recovered = 2
 
-    Remaining:
-    20 minutes
+    remaining = 20 minutes
 
-    Therefore we move lastLifeAt forward by
-    exactly 2 hours instead of resetting it to NOW.
+    We move the original timestamp forward
+    by exactly 2 hours.
     --------------------------------------------------------
     */
 
@@ -643,7 +641,7 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        RECOVER LIVES BEFORE STARTING
+        LOCK USER + RECOVER LIVES
         ----------------------------------------------------
         */
 
@@ -697,20 +695,194 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
+        GET CURRENT LEVEL + GAME COUNT
+        ----------------------------------------------------
+        */
+
+        const userResult =
+            await client.query(
+                `
+                SELECT
+                    id,
+                    lives,
+                    easy_level,
+                    medium_level,
+                    hard_level,
+                    easy_games,
+                    medium_games,
+                    hard_games
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [userId]
+            );
+
+
+        if (userResult.rowCount === 0) {
+
+            throw new Error(
+                "User not found"
+            );
+
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        /*
+        ----------------------------------------------------
+        SELECT DIFFICULTY PROGRESS
+        ----------------------------------------------------
+        */
+
+        let currentLevel;
+        let completedGames;
+
+
+        if (difficulty === "easy") {
+
+            currentLevel =
+                Number(user.easy_level);
+
+            completedGames =
+                Number(user.easy_games);
+
+        }
+
+        else if (difficulty === "medium") {
+
+            currentLevel =
+                Number(user.medium_level);
+
+            completedGames =
+                Number(user.medium_games);
+
+        }
+
+        else {
+
+            currentLevel =
+                Number(user.hard_level);
+
+            completedGames =
+                Number(user.hard_games);
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        PROTECT INVALID PROGRESS
+        ----------------------------------------------------
+        */
+
+        if (
+            !Number.isInteger(currentLevel) ||
+            currentLevel < 1
+        ) {
+
+            currentLevel = 1;
+
+        }
+
+
+        if (
+            !Number.isInteger(completedGames) ||
+            completedGames < 0
+        ) {
+
+            completedGames = 0;
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        100 GAME LIMIT
+        ----------------------------------------------------
+
+        Each difficulty has exactly 100 games.
+
+        Once 100 games are completed, that difficulty
+        cannot be started again.
+        ----------------------------------------------------
+        */
+
+        if (
+            completedGames >=
+            config.maxGames
+        ) {
+
+            await client.query(
+                "COMMIT"
+            );
+
+
+            return {
+
+                success: false,
+
+                error: "LEVELS_COMPLETED",
+
+                message:
+                    `${difficulty} difficulty is already completed.`,
+
+                difficulty,
+
+                completedGames:
+                    config.maxGames,
+
+                maxGames:
+                    config.maxGames,
+
+                level:
+                    Math.min(
+                        config.maxGames,
+                        currentLevel
+                    ),
+
+                lives:
+                    Number(
+                        user.lives
+                    ),
+
+                maxLives:
+                    MAX_LIVES
+
+            };
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        NORMALIZE LEVEL
+        ----------------------------------------------------
+        */
+
+        const level =
+            Math.min(
+                config.maxGames,
+                Math.max(
+                    1,
+                    currentLevel
+                )
+            );
+
+
+        /*
+        ----------------------------------------------------
         CONSUME ONE LIFE
         ----------------------------------------------------
 
-        If:
+        If 5 → 4:
+            start timer.
 
-        5 → 4
-
-        start regeneration timer.
-
-        If already:
-
-        4 → 3
-
-        keep the existing regeneration timer.
+        If 4 → 3:
+            preserve existing timer.
         ----------------------------------------------------
         */
 
@@ -735,7 +907,9 @@ export async function startGame(
 
                     updated_at = NOW()
 
-                WHERE id = $2
+                WHERE
+                    id = $2
+                    AND lives > 0
 
                 RETURNING
                     id,
@@ -752,13 +926,13 @@ export async function startGame(
         if (updatedUser.rowCount === 0) {
 
             throw new Error(
-                "User not found"
+                "Unable to consume life"
             );
 
         }
 
 
-        const user =
+        const updated =
             updatedUser.rows[0];
 
 
@@ -770,55 +944,6 @@ export async function startGame(
 
         const completionToken =
             generateCompletionToken();
-
-
-        /*
-        ----------------------------------------------------
-        GET CURRENT LEVEL
-        ----------------------------------------------------
-        */
-
-        const levelResult =
-            await client.query(
-                `
-                SELECT
-                    CASE
-
-                        WHEN $2 = 'easy'
-                        THEN easy_level
-
-                        WHEN $2 = 'medium'
-                        THEN medium_level
-
-                        WHEN $2 = 'hard'
-                        THEN hard_level
-
-                    END AS level
-
-                FROM users
-
-                WHERE id = $1
-                `,
-                [
-                    userId,
-                    difficulty
-                ]
-            );
-
-
-        if (levelResult.rowCount === 0) {
-
-            throw new Error(
-                "User not found"
-            );
-
-        }
-
-
-        const level =
-            Number(
-                levelResult.rows[0].level
-            );
 
 
         /*
@@ -890,9 +1015,9 @@ export async function startGame(
         */
 
         const nextLifeAt =
-            user.last_life_at
+            updated.last_life_at
                 ? calculateNextLifeAt(
-                    user.last_life_at
+                    updated.last_life_at
                 )
                 : null;
 
@@ -954,7 +1079,7 @@ export async function startGame(
 
             lives:
                 Number(
-                    user.lives
+                    updated.lives
                 ),
 
             maxLives:
@@ -965,11 +1090,16 @@ export async function startGame(
             secondsUntilNextLife,
 
             lifeCooldownMinutes:
-                LIFE_COOLDOWN_MINUTES
+                LIFE_COOLDOWN_MINUTES,
+
+            lifeCooldownSeconds:
+                LIFE_COOLDOWN_SECONDS
 
         };
 
-    } catch (error) {
+    }
+
+    catch (error) {
 
         try {
 
@@ -977,13 +1107,17 @@ export async function startGame(
                 "ROLLBACK"
             );
 
-        } catch {
+        }
+
+        catch {
             // Ignore rollback error.
         }
 
         throw error;
 
-    } finally {
+    }
+
+    finally {
 
         client.release();
 
@@ -999,24 +1133,17 @@ COMPLETE GAME
 
 IMPORTANT:
 
-This function ONLY gives the normal reward.
-
 The client cannot request:
 
-doubleReward = true
+doubleReward
+multiplier
+extraCoins
+rewardAmount
 
-or:
+The normal reward ALWAYS comes from the
+server-created game session.
 
-multiplier = 2
-
-The double reward must be granted by a separate
-server-verified AdsGram reward flow.
-
-Normal rewards:
-
-Easy   = 10
-Medium = 12
-Hard   = 15
+Ads / double reward are handled separately.
 ============================================================
 */
 
@@ -1127,18 +1254,52 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
+        VERIFY SESSION STATUS
+        ----------------------------------------------------
+        */
+
+        if (
+            session.status !==
+            "started"
+        ) {
+
+            throw new Error(
+                "Game session is not active"
+            );
+
+        }
+
+
+        /*
+        ----------------------------------------------------
         VERIFY TOKEN
         ----------------------------------------------------
         */
 
         if (
-            !completionToken ||
+            typeof completionToken !== "string" ||
+            completionToken.length < 20 ||
             completionToken !==
             session.completion_token
         ) {
 
             throw new Error(
                 "Invalid completion token"
+            );
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        VALIDATE GAME ID
+        ----------------------------------------------------
+        */
+
+        if (!gameId) {
+
+            throw new Error(
+                "Invalid game ID"
             );
 
         }
@@ -1210,7 +1371,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        NORMAL REWARD
+        VERIFY REWARD FROM DATABASE
         ----------------------------------------------------
         */
 
@@ -1220,15 +1381,65 @@ export async function completeGame({
             );
 
 
+        const config =
+            GAME_CONFIG[
+                session.difficulty
+            ];
+
+
+        if (!config) {
+
+            throw new Error(
+                "Invalid game difficulty"
+            );
+
+        }
+
+
+        /*
+        IMPORTANT:
+
+        Reward must match the server configuration.
+
+        This protects the database if a game session
+        somehow contains an invalid reward.
+        ----------------------------------------------------
+        */
+
         if (
-            !Number.isSafeInteger(
-                reward
-            ) ||
-            reward <= 0
+            reward !==
+            config.reward
         ) {
 
             throw new Error(
                 "Invalid game reward"
+            );
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        VERIFY LEVEL
+        ----------------------------------------------------
+        */
+
+        const sessionLevel =
+            Number(
+                session.level
+            );
+
+
+        if (
+            !Number.isInteger(
+                sessionLevel
+            ) ||
+            sessionLevel < 1 ||
+            sessionLevel > config.maxGames
+        ) {
+
+            throw new Error(
+                "Invalid game level"
             );
 
         }
@@ -1246,7 +1457,11 @@ export async function completeGame({
                 SELECT
                     coins,
                     today_coins,
-                    lives
+                    lives,
+                    games_played,
+                    easy_games,
+                    medium_games,
+                    hard_games
 
                 FROM users
 
@@ -1267,15 +1482,114 @@ export async function completeGame({
         }
 
 
+        const dbUser =
+            balanceResult.rows[0];
+
+
         const balanceBefore =
             Number(
-                balanceResult.rows[0].coins
+                dbUser.coins
             );
 
 
         /*
         ----------------------------------------------------
-        MARK GAME COMPLETED
+        PROTECT BALANCE
+        ----------------------------------------------------
+        */
+
+        if (
+            !Number.isSafeInteger(
+                balanceBefore
+            ) ||
+            balanceBefore < 0
+        ) {
+
+            throw new Error(
+                "Invalid user balance"
+            );
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        VERIFY DIFFICULTY PROGRESS
+        ----------------------------------------------------
+        */
+
+        let currentCompletedGames;
+
+
+        if (
+            session.difficulty ===
+            "easy"
+        ) {
+
+            currentCompletedGames =
+                Number(
+                    dbUser.easy_games
+                );
+
+        }
+
+        else if (
+            session.difficulty ===
+            "medium"
+        ) {
+
+            currentCompletedGames =
+                Number(
+                    dbUser.medium_games
+                );
+
+        }
+
+        else {
+
+            currentCompletedGames =
+                Number(
+                    dbUser.hard_games
+                );
+
+        }
+
+
+        if (
+            !Number.isInteger(
+                currentCompletedGames
+            ) ||
+            currentCompletedGames < 0
+        ) {
+
+            throw new Error(
+                "Invalid game progress"
+            );
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        PREVENT COMPLETING MORE THAN 100
+        ----------------------------------------------------
+        */
+
+        if (
+            currentCompletedGames >=
+            config.maxGames
+        ) {
+
+            throw new Error(
+                "Difficulty already completed"
+            );
+
+        }
+
+
+        /*
+        ----------------------------------------------------
+        MARK SESSION COMPLETED
         ----------------------------------------------------
         */
 
@@ -1319,7 +1633,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        UPDATE USER
+        UPDATE USER BALANCE + PROGRESS
         ----------------------------------------------------
         */
 
@@ -1343,7 +1657,10 @@ export async function completeGame({
                         CASE
 
                             WHEN $2 = 'easy'
-                            THEN easy_games + 1
+                            THEN LEAST(
+                                100,
+                                easy_games + 1
+                            )
 
                             ELSE easy_games
 
@@ -1353,7 +1670,10 @@ export async function completeGame({
                         CASE
 
                             WHEN $2 = 'medium'
-                            THEN medium_games + 1
+                            THEN LEAST(
+                                100,
+                                medium_games + 1
+                            )
 
                             ELSE medium_games
 
@@ -1363,7 +1683,10 @@ export async function completeGame({
                         CASE
 
                             WHEN $2 = 'hard'
-                            THEN hard_games + 1
+                            THEN LEAST(
+                                100,
+                                hard_games + 1
+                            )
 
                             ELSE hard_games
 
@@ -1373,7 +1696,6 @@ export async function completeGame({
                         CASE
 
                             WHEN $2 = 'easy'
-
                             THEN LEAST(
                                 100,
                                 easy_level + 1
@@ -1387,7 +1709,6 @@ export async function completeGame({
                         CASE
 
                             WHEN $2 = 'medium'
-
                             THEN LEAST(
                                 100,
                                 medium_level + 1
@@ -1401,7 +1722,6 @@ export async function completeGame({
                         CASE
 
                             WHEN $2 = 'hard'
-
                             THEN LEAST(
                                 100,
                                 hard_level + 1
@@ -1419,7 +1739,13 @@ export async function completeGame({
                     coins,
                     today_coins,
                     games_played,
-                    lives
+                    lives,
+                    easy_games,
+                    medium_games,
+                    hard_games,
+                    easy_level,
+                    medium_level,
+                    hard_level
                 `,
                 [
                     reward,
@@ -1484,7 +1810,7 @@ export async function completeGame({
                 userId,
                 gameId,
                 session.difficulty,
-                Number(session.level),
+                sessionLevel,
                 reward,
                 safeMoves,
                 safeDuration
@@ -1555,19 +1881,28 @@ export async function completeGame({
             baseReward:
                 reward,
 
+            /*
+            The normal game completion is always x1.
+
+            Client cannot change this value.
+            */
             multiplier: 1,
 
             doubleReward: false,
 
+            /*
+            This only tells the frontend that a
+            separate verified ad reward may be offered.
+
+            It does NOT grant anything.
+            */
             doubleRewardAvailable: true,
 
             difficulty:
                 session.difficulty,
 
             level:
-                Number(
-                    session.level
-                ),
+                sessionLevel,
 
             balance:
                 balanceAfter,
@@ -1588,11 +1923,32 @@ export async function completeGame({
                 ),
 
             maxLives:
-                MAX_LIVES
+                MAX_LIVES,
+
+            difficultyProgress: {
+
+                easy:
+                    Number(
+                        user.easy_games
+                    ),
+
+                medium:
+                    Number(
+                        user.medium_games
+                    ),
+
+                hard:
+                    Number(
+                        user.hard_games
+                    )
+
+            }
 
         };
 
-    } catch (error) {
+    }
+
+    catch (error) {
 
         try {
 
@@ -1600,13 +1956,17 @@ export async function completeGame({
                 "ROLLBACK"
             );
 
-        } catch {
+        }
+
+        catch {
             // Ignore rollback error.
         }
 
         throw error;
 
-    } finally {
+    }
+
+    finally {
 
         client.release();
 
@@ -1782,11 +2142,32 @@ export async function getGameStatus(
                 LIFE_COOLDOWN_MINUTES,
 
             lifeCooldownSeconds:
-                LIFE_COOLDOWN_SECONDS
+                LIFE_COOLDOWN_SECONDS,
+
+            /*
+            ------------------------------------------------
+            DIFFICULTY LIMITS
+            ------------------------------------------------
+            */
+
+            maxGames: {
+
+                easy:
+                    GAME_CONFIG.easy.maxGames,
+
+                medium:
+                    GAME_CONFIG.medium.maxGames,
+
+                hard:
+                    GAME_CONFIG.hard.maxGames
+
+            }
 
         };
 
-    } catch (error) {
+    }
+
+    catch (error) {
 
         try {
 
@@ -1794,13 +2175,17 @@ export async function getGameStatus(
                 "ROLLBACK"
             );
 
-        } catch {
+        }
+
+        catch {
             // Ignore rollback error.
         }
 
         throw error;
 
-    } finally {
+    }
+
+    finally {
 
         client.release();
 
