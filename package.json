@@ -8,7 +8,7 @@
     "start": "node server.js",
     "worker": "node workers/withdrawal-worker.js",
     "dev": "node --watch server.js",
-    "migrate:adsgram": "node db/migrate.js",
+    "migrate": "node db/migrate.js",
     "check": "node --check server.js"
   },
   "engines": {
