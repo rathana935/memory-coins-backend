@@ -10,6 +10,40 @@ import {
 const router = express.Router();
 
 /* =========================================================
+   HELPERS
+========================================================= */
+
+function isValidPositiveInteger(value) {
+  if (
+    typeof value === "number"
+  ) {
+    return (
+      Number.isSafeInteger(value) &&
+      value > 0
+    );
+  }
+
+  if (
+    typeof value !== "string" ||
+    !/^\d+$/.test(value.trim())
+  ) {
+    return false;
+  }
+
+  const number = Number(value);
+
+  return (
+    Number.isSafeInteger(number) &&
+    number > 0
+  );
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+
+/* =========================================================
    CREATE WITHDRAWAL
 
    POST /api/withdrawals
@@ -32,7 +66,14 @@ const router = express.Router();
 
 router.post("/", async (req, res) => {
   try {
-    if (!req.user || !req.user.user_id) {
+    /* -----------------------------------------------------
+       Authentication
+    ----------------------------------------------------- */
+
+    if (
+      !req.user ||
+      !req.user.user_id
+    ) {
       return res.status(401).json({
         success: false,
         error: "Authentication required."
@@ -47,8 +88,9 @@ router.post("/", async (req, res) => {
       abaAccountName
     } = req.body || {};
 
+
     /* -----------------------------------------------------
-       Basic request validation
+       Amount validation
     ----------------------------------------------------- */
 
     if (
@@ -62,24 +104,58 @@ router.post("/", async (req, res) => {
       });
     }
 
+    if (!isValidPositiveInteger(amountCoins)) {
+      return res.status(400).json({
+        success: false,
+        error: "Withdrawal amount must be a positive whole number."
+      });
+    }
+
+    const normalizedAmountCoins =
+      Number(amountCoins);
+
+    if (
+      !Number.isSafeInteger(
+        normalizedAmountCoins
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid withdrawal amount."
+      });
+    }
+
+
+    /* -----------------------------------------------------
+       Provider validation
+    ----------------------------------------------------- */
+
     const normalizedProvider =
       typeof provider === "string"
         ? provider.trim().toLowerCase()
         : "";
 
-    if (!normalizedProvider) {
+    if (
+      normalizedProvider !== "faucetpay" &&
+      normalizedProvider !== "aba"
+    ) {
       return res.status(400).json({
         success: false,
         error:
-          "Withdrawal method is required. Choose FaucetPay or ABA Bank."
+          "Invalid withdrawal method. Choose FaucetPay or ABA Bank."
       });
     }
 
-    /* -----------------------------------------------------
-       Provider-specific validation
-       ----------------------------------------------------- */
 
-    if (normalizedProvider === "faucetpay") {
+    /* -----------------------------------------------------
+       FaucetPay validation
+    ----------------------------------------------------- */
+
+    let normalizedFaucetPayEmail;
+
+    if (
+      normalizedProvider === "faucetpay"
+    ) {
       if (
         typeof faucetpayEmail !== "string" ||
         !faucetpayEmail.trim()
@@ -90,9 +166,36 @@ router.post("/", async (req, res) => {
             "FaucetPay email is required."
         });
       }
+
+      normalizedFaucetPayEmail =
+        faucetpayEmail
+          .trim()
+          .toLowerCase();
+
+      if (
+        !isValidEmail(
+          normalizedFaucetPayEmail
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Please enter a valid FaucetPay email."
+        });
+      }
     }
 
-    if (normalizedProvider === "aba") {
+
+    /* -----------------------------------------------------
+       ABA validation
+    ----------------------------------------------------- */
+
+    let normalizedAbaAccountNumber;
+    let normalizedAbaAccountName;
+
+    if (
+      normalizedProvider === "aba"
+    ) {
       if (
         typeof abaAccountNumber !== "string" ||
         !abaAccountNumber.trim()
@@ -114,47 +217,88 @@ router.post("/", async (req, res) => {
             "ABA account holder name is required."
         });
       }
+
+      normalizedAbaAccountNumber =
+        abaAccountNumber.trim();
+
+      normalizedAbaAccountName =
+        abaAccountName
+          .trim()
+          .replace(/\s+/g, " ");
+
+      /*
+         Basic ABA account number protection.
+         Keep this reasonably flexible because
+         account number formats can vary.
+      */
+
+      if (
+        !/^[0-9]{6,30}$/.test(
+          normalizedAbaAccountNumber
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Please enter a valid ABA account number."
+        });
+      }
+
+      if (
+        normalizedAbaAccountName.length < 2 ||
+        normalizedAbaAccountName.length > 100
+      ) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "Please enter a valid ABA account holder name."
+        });
+      }
     }
+
 
     /* -----------------------------------------------------
        Create withdrawal
-       ----------------------------------------------------- */
+    ----------------------------------------------------- */
 
     const withdrawal =
       await createWithdrawal(
         req.user.user_id,
-        amountCoins,
+        normalizedAmountCoins,
         normalizedProvider,
         {
           faucetpayEmail:
-            typeof faucetpayEmail === "string"
-              ? faucetpayEmail.trim()
-              : undefined,
+            normalizedFaucetPayEmail,
 
           abaAccountNumber:
-            typeof abaAccountNumber === "string"
-              ? abaAccountNumber.trim()
-              : undefined,
+            normalizedAbaAccountNumber,
 
           abaAccountName:
-            typeof abaAccountName === "string"
-              ? abaAccountName.trim()
-              : undefined
+            normalizedAbaAccountName
         }
       );
 
+
+    /* -----------------------------------------------------
+       Safe response
+    ----------------------------------------------------- */
+
     return res.status(201).json({
       success: true,
+
       message:
         "Withdrawal request created successfully.",
+
       withdrawal
     });
 
   } catch (error) {
+
     console.error(
       "Create withdrawal error:",
       error
     );
+
 
     switch (error.message) {
 
@@ -176,6 +320,7 @@ router.post("/", async (req, res) => {
             `Minimum withdrawal is ${WITHDRAWAL_CONFIG.minimumCoins} coins.`
         });
 
+
       /* ---------------------------------------------------
          PROVIDER
       --------------------------------------------------- */
@@ -187,6 +332,7 @@ router.post("/", async (req, res) => {
             "Invalid withdrawal method. Choose FaucetPay or ABA Bank."
         });
 
+
       /* ---------------------------------------------------
          FAUCETPAY
       --------------------------------------------------- */
@@ -197,6 +343,7 @@ router.post("/", async (req, res) => {
           error:
             "Please enter a valid FaucetPay email."
         });
+
 
       /* ---------------------------------------------------
          ABA
@@ -216,6 +363,7 @@ router.post("/", async (req, res) => {
             "Please enter a valid ABA account holder name."
         });
 
+
       /* ---------------------------------------------------
          USER
       --------------------------------------------------- */
@@ -234,6 +382,7 @@ router.post("/", async (req, res) => {
             "Your account is blocked."
         });
 
+
       /* ---------------------------------------------------
          BALANCE
       --------------------------------------------------- */
@@ -245,6 +394,7 @@ router.post("/", async (req, res) => {
             "Insufficient coin balance."
         });
 
+
       /* ---------------------------------------------------
          PENDING WITHDRAWAL
       --------------------------------------------------- */
@@ -255,6 +405,7 @@ router.post("/", async (req, res) => {
           error:
             "You already have a pending withdrawal."
         });
+
 
       /* ---------------------------------------------------
          DEFAULT
@@ -279,44 +430,53 @@ router.post("/", async (req, res) => {
 
 router.get("/", async (req, res) => {
   try {
-    if (!req.user || !req.user.user_id) {
+
+    if (
+      !req.user ||
+      !req.user.user_id
+    ) {
       return res.status(401).json({
         success: false,
         error: "Authentication required."
       });
     }
 
-    let limit = Number.parseInt(
-      req.query.limit,
-      10
-    );
 
-    let offset = Number.parseInt(
-      req.query.offset,
-      10
-    );
+    let limit =
+      Number.parseInt(
+        req.query.limit,
+        10
+      );
 
-    /* -----------------------------------------------------
-       Safe pagination limits
-    ----------------------------------------------------- */
+    let offset =
+      Number.parseInt(
+        req.query.offset,
+        10
+      );
 
-    if (!Number.isInteger(limit)) {
+
+    if (
+      !Number.isInteger(limit)
+    ) {
       limit = 20;
     }
 
-    if (!Number.isInteger(offset)) {
+    if (
+      !Number.isInteger(offset)
+    ) {
       offset = 0;
     }
 
-    limit = Math.min(
-      Math.max(limit, 1),
-      100
-    );
 
-    offset = Math.max(
-      offset,
-      0
-    );
+    limit =
+      Math.min(
+        Math.max(limit, 1),
+        100
+      );
+
+    offset =
+      Math.max(offset, 0);
+
 
     const withdrawals =
       await getUserWithdrawals(
@@ -325,12 +485,14 @@ router.get("/", async (req, res) => {
         offset
       );
 
+
     return res.json({
       success: true,
       withdrawals
     });
 
   } catch (error) {
+
     console.error(
       "Get withdrawals error:",
       error
@@ -353,12 +515,17 @@ router.get("/", async (req, res) => {
 
 router.get("/:id", async (req, res) => {
   try {
-    if (!req.user || !req.user.user_id) {
+
+    if (
+      !req.user ||
+      !req.user.user_id
+    ) {
       return res.status(401).json({
         success: false,
         error: "Authentication required."
       });
     }
+
 
     const withdrawal =
       await getWithdrawal(
@@ -366,16 +533,19 @@ router.get("/:id", async (req, res) => {
         req.params.id
       );
 
+
     return res.json({
       success: true,
       withdrawal
     });
 
   } catch (error) {
+
     console.error(
       "Get withdrawal error:",
       error
     );
+
 
     if (
       error.message ===
@@ -387,6 +557,7 @@ router.get("/:id", async (req, res) => {
           "Withdrawal not found."
       });
     }
+
 
     return res.status(500).json({
       success: false,
