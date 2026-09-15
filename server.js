@@ -33,6 +33,16 @@ const NODE_ENV =
 
 
 /* =========================================================
+   ADSGRAM
+========================================================= */
+
+const ADSGRAM_BLOCK_ID =
+    String(
+        process.env.ADSGRAM_BLOCK_ID || "48045"
+    );
+
+
+/* =========================================================
    TRUST PROXY
 ========================================================= */
 
@@ -88,7 +98,8 @@ const generalLimiter =
         legacyHeaders: false,
         message: {
             success: false,
-            message: "Too many requests. Please try again later."
+            message:
+                "Too many requests. Please try again later."
         }
     });
 
@@ -101,7 +112,8 @@ const authLimiter =
         legacyHeaders: false,
         message: {
             success: false,
-            message: "Too many authentication requests."
+            message:
+                "Too many authentication requests."
         }
     });
 
@@ -114,7 +126,8 @@ const adsgramLimiter =
         legacyHeaders: false,
         message: {
             success: false,
-            message: "Too many ad reward requests."
+            message:
+                "Too many ad reward requests."
         }
     });
 
@@ -133,45 +146,94 @@ app.get(
     (req, res) => {
 
         res.json({
+
             success: true,
-            name: "Memory Card Backend",
-            environment: NODE_ENV,
-            status: "running",
+
+            name:
+                "Memory Card Backend",
+
+            environment:
+                NODE_ENV,
+
+            status:
+                "running",
+
+            adsgramBlockId:
+                ADSGRAM_BLOCK_ID,
+
             endpoints: {
-                health: "/health",
-                auth: "/api/auth",
-                game: "/api/game",
-                rewards: "/api/rewards",
-                leaderboard: "/api/leaderboard",
-                referrals: "/api/referrals",
-                withdrawals: "/api/withdrawals",
-                adsgramReward: "/api/adsgram/reward"
+
+                health:
+                    "/health",
+
+                auth:
+                    "/api/auth",
+
+                game:
+                    "/api/game",
+
+                rewards:
+                    "/api/rewards",
+
+                leaderboard:
+                    "/api/leaderboard",
+
+                referrals:
+                    "/api/referrals",
+
+                withdrawals:
+                    "/api/withdrawals",
+
+                adsgramReward:
+                    "/api/adsgram/reward"
+
             }
+
         });
 
     }
 );
 
 
+/* =========================================================
+   HEALTH
+========================================================= */
+
 app.get(
     "/health",
     async (req, res) => {
 
-        try{
+        try {
 
             await pool.query(
                 "SELECT 1"
             );
 
             res.json({
+
                 success: true,
-                status: "ok",
-                database: "connected",
-                environment: NODE_ENV,
-                timestamp: new Date().toISOString()
+
+                status:
+                    "ok",
+
+                database:
+                    "connected",
+
+                environment:
+                    NODE_ENV,
+
+                adsgram:
+                    {
+                        blockId:
+                            ADSGRAM_BLOCK_ID
+                    },
+
+                timestamp:
+                    new Date().toISOString()
+
             });
 
-        }catch(error){
+        } catch (error) {
 
             console.error(
                 "Health check database error:",
@@ -179,11 +241,21 @@ app.get(
             );
 
             res.status(503).json({
+
                 success: false,
-                status: "error",
-                database: "disconnected",
-                environment: NODE_ENV,
-                timestamp: new Date().toISOString()
+
+                status:
+                    "error",
+
+                database:
+                    "disconnected",
+
+                environment:
+                    NODE_ENV,
+
+                timestamp:
+                    new Date().toISOString()
+
             });
 
         }
@@ -196,17 +268,19 @@ app.get(
    ADSGRAM REWARD URL
 =========================================================
 
-   AdsGram Reward URL:
+   AdsGram calls:
 
-   https://memory-coins-backend.onrender.com/api/adsgram/reward?userid=[userId]
+   GET
 
-   Optional:
-   ?userid=[userId]&ad_type=life
+   /api/adsgram/reward?userid=[userId]
 
-   Supported:
-   life
-   double_reward
-   lucky_roll
+   IMPORTANT:
+
+   Do NOT trust ad_type from the URL.
+
+   The backend finds the user's latest pending
+   AdsGram intent and determines the ad type
+   from PostgreSQL.
 
 ========================================================= */
 
@@ -215,15 +289,7 @@ app.get(
     adsgramLimiter,
     async (req, res) => {
 
-        try{
-
-            /*
-             * AdsGram sends Telegram user ID.
-             *
-             * Accept both:
-             * userid
-             * user_id
-             */
+        try {
 
             const telegramId =
                 String(
@@ -233,66 +299,25 @@ app.get(
                 ).trim();
 
 
-            if(!telegramId){
+            if (!telegramId) {
 
                 return res.status(400).json({
+
                     success: false,
-                    message: "Missing userid."
+
+                    message:
+                        "Missing userid."
+
                 });
 
             }
 
-
-            /*
-             * Do not allow arbitrary ad types.
-             */
-
-            const requestedAdType =
-                String(
-                    req.query.ad_type ||
-                    req.query.adType ||
-                    "life"
-                ).trim();
-
-
-            const allowedTypes = [
-                "life",
-                "double_reward",
-                "lucky_roll"
-            ];
-
-
-            if(
-                !allowedTypes.includes(
-                    requestedAdType
-                )
-            ){
-
-                return res.status(400).json({
-                    success: false,
-                    message: "Invalid ad type."
-                });
-
-            }
-
-
-            /*
-             * IMPORTANT:
-             *
-             * The Reward URL itself does not tell us
-             * which frontend intent this ad belongs to.
-             *
-             * The rewards service therefore matches the
-             * Telegram user to the most recent pending
-             * intent for this ad type.
-             *
-             * The reward is NOT directly added here.
-             */
 
             const reward =
                 await confirmAdsgramReward({
-                    telegramId,
-                    adType: requestedAdType
+
+                    telegramId
+
                 });
 
 
@@ -301,22 +326,27 @@ app.get(
                 success: true,
 
                 message:
-                    "AdsGram reward received.",
+                    "AdsGram reward confirmed.",
 
                 reward: {
+
                     id:
                         reward.id,
 
                     adType:
-                        reward.adType,
+                        reward.ad_type,
 
                     status:
-                        reward.status
+                        reward.status,
+
+                    confirmedAt:
+                        reward.confirmed_at
+
                 }
 
             });
 
-        }catch(error){
+        } catch (error) {
 
             console.error(
                 "AdsGram Reward URL error:",
@@ -324,54 +354,81 @@ app.get(
             );
 
 
-            /*
-             * Always return a controlled response.
-             *
-             * Never expose stack traces or SQL details.
-             */
-
-            if(
+            if (
                 error.code ===
                 "USER_NOT_FOUND"
-            ){
+            ) {
 
                 return res.status(404).json({
+
                     success: false,
-                    message: "Telegram user not found."
+
+                    message:
+                        "Telegram user not found."
+
                 });
 
             }
 
 
-            if(
+            if (
                 error.code ===
                 "NO_PENDING_AD"
-            ){
+            ) {
 
                 return res.status(409).json({
+
                     success: false,
-                    message: "No pending ad reward."
+
+                    message:
+                        "No pending ad reward."
+
                 });
 
             }
 
 
-            if(
+            if (
+                error.code ===
+                "AD_ALREADY_PROCESSED"
+            ) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    message:
+                        "Ad reward was already processed."
+
+                });
+
+            }
+
+
+            if (
                 error.code ===
                 "INVALID_AD_TYPE"
-            ){
+            ) {
 
-                return res.status(400).json({
+                return res.status(500).json({
+
                     success: false,
-                    message: "Invalid ad type."
+
+                    message:
+                        "Invalid stored ad type."
+
                 });
 
             }
 
 
             return res.status(500).json({
+
                 success: false,
-                message: "Unable to process ad reward."
+
+                message:
+                    "Unable to process ad reward."
+
             });
 
         }
@@ -429,8 +486,12 @@ app.use(
     (req, res) => {
 
         res.status(404).json({
+
             success: false,
-            message: "Route not found."
+
+            message:
+                "Route not found."
+
         });
 
     }
@@ -450,7 +511,9 @@ app.use(
         );
 
 
-        if(res.headersSent){
+        if (
+            res.headersSent
+        ) {
 
             return next(error);
 
@@ -504,6 +567,10 @@ const server =
             );
 
             console.log(
+                `AdsGram Block ID: ${ADSGRAM_BLOCK_ID}`
+            );
+
+            console.log(
                 "Server started successfully."
             );
 
@@ -529,7 +596,7 @@ const server =
 
 async function shutdown(
     signal
-){
+) {
 
     console.log(
         `${signal} received. Shutting down...`
@@ -539,7 +606,7 @@ async function shutdown(
     server.close(
         async () => {
 
-            try{
+            try {
 
                 await pool.end();
 
@@ -547,14 +614,14 @@ async function shutdown(
                     "Database pool closed."
                 );
 
-            }catch(error){
+            } catch (error) {
 
                 console.error(
                     "Error closing database:",
                     error
                 );
 
-            }finally{
+            } finally {
 
                 process.exit(0);
 
