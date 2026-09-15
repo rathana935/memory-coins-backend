@@ -8,10 +8,10 @@ MEMORY COINS WITHDRAWAL SERVICE
 Economy:
   10,000 coins = $1
 
-Minimum:
+Minimum withdrawal:
   2,500 coins
 
-Withdrawal methods:
+Providers:
   - FaucetPay
   - ABA Bank
 
@@ -20,15 +20,16 @@ Important:
 
   It does NOT automatically send money.
 
-  FaucetPay and ABA payout processing should be handled
-  by a separate payout worker/API integration.
+  Actual FaucetPay / ABA payout processing should be
+  handled by a separate payout worker or admin system.
 
 Security:
   - User row is locked with FOR UPDATE
   - Balance is checked inside transaction
-  - Pending/processing withdrawal is checked
+  - Active withdrawal is checked
   - Coins are deducted atomically
   - Coin transaction is recorded
+  - Provider-specific payment details are validated
 =========================================================
 */
 
@@ -59,7 +60,7 @@ function validateEmail(email) {
 }
 
 /* =========================================================
-   VALIDATE ABA ACCOUNT
+   VALIDATE ABA ACCOUNT NUMBER
 ========================================================= */
 
 function validateAbaAccountNumber(accountNumber) {
@@ -73,8 +74,8 @@ function validateAbaAccountNumber(accountNumber) {
   const value = String(accountNumber).trim();
 
   /*
-    Keep this reasonably flexible because ABA account
-    numbers may vary in format.
+    Keep validation flexible because account-number
+    formats may vary.
   */
 
   if (value.length < 6 || value.length > 30) {
@@ -144,6 +145,10 @@ export async function createWithdrawal(
 ) {
   const amountCoins = Number(coins);
 
+  /* -------------------------------------------------------
+     Validate amount
+  ------------------------------------------------------- */
+
   if (
     !Number.isSafeInteger(amountCoins) ||
     amountCoins <= 0
@@ -154,6 +159,10 @@ export async function createWithdrawal(
   if (amountCoins < MINIMUM_WITHDRAWAL) {
     throw new Error("MINIMUM_WITHDRAWAL");
   }
+
+  /* -------------------------------------------------------
+     Validate provider
+  ------------------------------------------------------- */
 
   const normalizedProvider =
     normalizeProvider(provider);
@@ -166,9 +175,9 @@ export async function createWithdrawal(
   let abaAccountNumber = null;
   let abaAccountName = null;
 
-  /* =====================================================
-     VALIDATE PAYMENT METHOD
-  ===================================================== */
+  /* =======================================================
+     FAUCETPAY
+  ======================================================= */
 
   if (
     normalizedProvider ===
@@ -187,6 +196,10 @@ export async function createWithdrawal(
         .trim()
         .toLowerCase();
   }
+
+  /* =======================================================
+     ABA BANK
+  ======================================================= */
 
   if (
     normalizedProvider ===
@@ -220,6 +233,10 @@ export async function createWithdrawal(
     abaAccountName =
       paymentDetails.abaAccountName.trim();
   }
+
+  /* =======================================================
+     DATABASE TRANSACTION
+  ======================================================= */
 
   const client = await pool.connect();
 
@@ -256,9 +273,11 @@ export async function createWithdrawal(
     const currentBalance =
       Number(user.coins);
 
-    if (
-      currentBalance < amountCoins
-    ) {
+    /* =====================================================
+       CHECK BALANCE
+    ===================================================== */
+
+    if (currentBalance < amountCoins) {
       throw new Error(
         "INSUFFICIENT_BALANCE"
       );
@@ -279,6 +298,7 @@ export async function createWithdrawal(
             'processing'
           )
         LIMIT 1
+        FOR UPDATE
         `,
         [userId]
       );
@@ -288,6 +308,10 @@ export async function createWithdrawal(
         "WITHDRAWAL_PENDING"
       );
     }
+
+    /* =====================================================
+       CALCULATE USD
+    ===================================================== */
 
     const usdAmount =
       coinsToUsd(amountCoins);
@@ -410,6 +434,10 @@ export async function createWithdrawal(
       ]
     );
 
+    /* =====================================================
+       COMMIT
+    ===================================================== */
+
     await client.query("COMMIT");
 
     return {
@@ -447,11 +475,15 @@ export async function createWithdrawal(
     };
 
   } catch (error) {
+
     await client.query("ROLLBACK");
+
     throw error;
 
   } finally {
+
     client.release();
+
   }
 }
 
@@ -467,191 +499,3 @@ export async function getUserWithdrawals(
   limit = Math.min(
     Math.max(
       Number(limit) || 20,
-      1
-    ),
-    50
-  );
-
-  offset = Math.max(
-    Number(offset) || 0,
-    0
-  );
-
-  const result = await pool.query(
-    `
-    SELECT
-      id,
-      provider,
-      amount_coins,
-      amount_usd,
-      faucetpay_email,
-      aba_account_number,
-      aba_account_name,
-      status,
-      provider_transaction_id,
-      failure_reason,
-      requested_at,
-      processed_at,
-      updated_at
-    FROM withdrawals
-    WHERE user_id = $1
-    ORDER BY requested_at DESC
-    LIMIT $2
-    OFFSET $3
-    `,
-    [
-      userId,
-      limit,
-      offset
-    ]
-  );
-
-  return result.rows.map(row => ({
-    id: row.id,
-
-    provider:
-      row.provider,
-
-    amountCoins:
-      Number(
-        row.amount_coins
-      ),
-
-    amountUsd:
-      Number(
-        row.amount_usd
-      ),
-
-    faucetpayEmail:
-      row.faucetpay_email,
-
-    abaAccountNumber:
-      row.aba_account_number,
-
-    abaAccountName:
-      row.aba_account_name,
-
-    status:
-      row.status,
-
-    providerTransactionId:
-      row.provider_transaction_id,
-
-    failureReason:
-      row.failure_reason,
-
-    requestedAt:
-      row.requested_at,
-
-    processedAt:
-      row.processed_at,
-
-    updatedAt:
-      row.updated_at
-  }));
-}
-
-/* =========================================================
-   GET SINGLE WITHDRAWAL
-========================================================= */
-
-export async function getWithdrawal(
-  userId,
-  withdrawalId
-) {
-  const result = await pool.query(
-    `
-    SELECT
-      id,
-      provider,
-      amount_coins,
-      amount_usd,
-      faucetpay_email,
-      aba_account_number,
-      aba_account_name,
-      status,
-      provider_transaction_id,
-      failure_reason,
-      requested_at,
-      processed_at,
-      updated_at
-    FROM withdrawals
-    WHERE id = $1
-      AND user_id = $2
-    LIMIT 1
-    `,
-    [
-      withdrawalId,
-      userId
-    ]
-  );
-
-  if (result.rowCount === 0) {
-    throw new Error(
-      "WITHDRAWAL_NOT_FOUND"
-    );
-  }
-
-  const row = result.rows[0];
-
-  return {
-    id: row.id,
-
-    provider:
-      row.provider,
-
-    amountCoins:
-      Number(
-        row.amount_coins
-      ),
-
-    amountUsd:
-      Number(
-        row.amount_usd
-      ),
-
-    faucetpayEmail:
-      row.faucetpay_email,
-
-    abaAccountNumber:
-      row.aba_account_number,
-
-    abaAccountName:
-      row.aba_account_name,
-
-    status:
-      row.status,
-
-    providerTransactionId:
-      row.provider_transaction_id,
-
-    failureReason:
-      row.failure_reason,
-
-    requestedAt:
-      row.requested_at,
-
-    processedAt:
-      row.processed_at,
-
-    updatedAt:
-      row.updated_at
-  };
-}
-
-/* =========================================================
-   CONFIG
-========================================================= */
-
-export const WITHDRAWAL_CONFIG = {
-  providers: [
-    PROVIDERS.FAUCETPAY,
-    PROVIDERS.ABA
-  ],
-
-  coinsPerUsd:
-    COINS_PER_USD,
-
-  minimumCoins:
-    MINIMUM_WITHDRAWAL
-};
