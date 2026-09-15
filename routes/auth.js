@@ -15,6 +15,13 @@ const router = express.Router();
 
 
 /* =========================================================
+   CONFIG
+========================================================= */
+
+const REFERRAL_REWARD = 250;
+
+
+/* =========================================================
    SESSION HELPERS
 ========================================================= */
 
@@ -41,19 +48,13 @@ function hashToken(token) {
    REFERRAL HELPERS
 ========================================================= */
 
-const REFERRAL_REWARD = 250;
-
-
 /*
-Telegram referral links will look like:
+Expected Telegram referral parameter:
 
-https://t.me/YOUR_BOT?startapp=ref_123456789
+ref_123456789
 
-or
-
-https://t.me/YOUR_BOT?start=ref_123456789
-
-The Telegram WebApp initData can contain start_param.
+where 123456789 is the referrer's
+Telegram ID.
 */
 
 function getReferralCode(telegram) {
@@ -67,16 +68,9 @@ function getReferralCode(telegram) {
 }
 
 
-/*
-Expected referral code:
-
-ref_123456789
-
-where 123456789 is the referrer's
-Telegram ID.
-*/
-
-function getReferrerTelegramId(referralCode) {
+function getReferrerTelegramId(
+    referralCode
+) {
 
     if (
         typeof referralCode !== "string"
@@ -87,18 +81,24 @@ function getReferrerTelegramId(referralCode) {
     const code =
         referralCode.trim();
 
+
     if (
         !code.startsWith("ref_")
     ) {
         return null;
     }
 
+
     const telegramId =
         code.substring(4).trim();
 
-    if (!/^\d+$/.test(telegramId)) {
+
+    if (
+        !/^\d+$/.test(telegramId)
+    ) {
         return null;
     }
+
 
     return telegramId;
 
@@ -116,6 +116,7 @@ router.post(
         const client =
             await pool.connect();
 
+
         try {
 
             const {
@@ -126,19 +127,20 @@ router.post(
             if (!initData) {
 
                 return res.status(400).json({
+
                     success: false,
+
                     error:
                         "initData is required"
+
                 });
 
             }
 
 
-            /*
-            -------------------------------------------------
-            VERIFY TELEGRAM INIT DATA
-            -------------------------------------------------
-            */
+            /* =================================================
+               VERIFY TELEGRAM DATA
+            ================================================= */
 
             const telegram =
                 validateTelegramInitData(
@@ -156,24 +158,26 @@ router.post(
             ) {
 
                 return res.status(401).json({
+
                     success: false,
+
                     error:
                         "Telegram user information is missing."
+
                 });
 
             }
 
 
-            /*
-            -------------------------------------------------
-            GET REFERRAL INFORMATION
-            -------------------------------------------------
-            */
+            /* =================================================
+               GET REFERRAL PARAMETER
+            ================================================= */
 
             const referralCode =
                 getReferralCode(
                     telegram
                 );
+
 
             const referrerTelegramId =
                 getReferrerTelegramId(
@@ -186,19 +190,16 @@ router.post(
             );
 
 
-            /*
-            -------------------------------------------------
-            CHECK WHETHER THIS TELEGRAM USER ALREADY EXISTS
-            -------------------------------------------------
-            */
+            /* =================================================
+               CHECK EXISTING USER
+            ================================================= */
 
             const existingUserResult =
                 await client.query(
                     `
                     SELECT
                         id,
-                        telegram_id,
-                        coins
+                        telegram_id
                     FROM users
                     WHERE telegram_id = $1
                     FOR UPDATE
@@ -215,11 +216,9 @@ router.post(
                     .length === 0;
 
 
-            /*
-            -------------------------------------------------
-            CREATE OR UPDATE TELEGRAM USER
-            -------------------------------------------------
-            */
+            /* =================================================
+               CREATE / UPDATE USER
+            ================================================= */
 
             const userResult =
                 await client.query(
@@ -325,13 +324,17 @@ router.post(
 
 
             /* =================================================
-               PROCESS REFERRAL
-               
-               Only NEW users can trigger referral rewards.
+               REFERRAL PROCESSING
+
+               Only NEW USERS can generate
+               a referral reward.
             ================================================= */
 
-            let referralReward = 0;
-            let referralCreated = false;
+            let referralCreated =
+                false;
+
+            let referralReward =
+                0;
 
 
             if (
@@ -341,16 +344,17 @@ router.post(
                     String(tgUser.id)
             ) {
 
-                /*
-                Find the referrer.
-                */
+                /* ---------------------------------------------
+                   FIND REFERRER
+                --------------------------------------------- */
 
                 const referrerResult =
                     await client.query(
                         `
                         SELECT
                             id,
-                            telegram_id
+                            telegram_id,
+                            coins
                         FROM users
                         WHERE telegram_id = $1
                         FOR UPDATE
@@ -362,7 +366,9 @@ router.post(
 
 
                 if (
-                    referrerResult.rows.length > 0
+                    referrerResult
+                        .rows
+                        .length > 0
                 ) {
 
                     const referrer =
@@ -370,10 +376,10 @@ router.post(
                             .rows[0];
 
 
-                    /*
-                    Make sure this user hasn't
-                    already been referred.
-                    */
+                    /* -----------------------------------------
+                       CHECK WHETHER REFERRED USER
+                       ALREADY HAS A REFERRAL
+                    ----------------------------------------- */
 
                     const existingReferralResult =
                         await client.query(
@@ -383,7 +389,9 @@ router.post(
                             WHERE referred_user_id = $1
                             LIMIT 1
                             `,
-                            [user.id]
+                            [
+                                user.id
+                            ]
                         );
 
 
@@ -393,42 +401,63 @@ router.post(
                             .length === 0
                     ) {
 
-                        /*
-                        Create referral record.
-                        */
-
-                        await client.query(
-                            `
-                            INSERT INTO referrals
-                            (
-                                referrer_user_id,
-                                referred_user_id,
-                                reward_coins,
-                                status,
-                                created_at,
-                                completed_at
-                            )
-                            VALUES
-                            (
-                                $1,
-                                $2,
-                                $3,
-                                'completed',
-                                NOW(),
-                                NOW()
-                            )
-                            `,
-                            [
-                                referrer.id,
-                                user.id,
-                                REFERRAL_REWARD
-                            ]
-                        );
+                        const balanceBefore =
+                            Number(
+                                referrer.coins
+                            );
 
 
-                        /*
-                        Give referrer +250 coins.
-                        */
+                        const balanceAfter =
+                            balanceBefore +
+                            REFERRAL_REWARD;
+
+
+                        /* -------------------------------------
+                           CREATE REFERRAL RECORD
+                        ------------------------------------- */
+
+                        const referralResult =
+                            await client.query(
+                                `
+                                INSERT INTO referrals
+                                (
+                                    referrer_user_id,
+                                    referred_user_id,
+                                    reward_coins,
+                                    status,
+                                    created_at,
+                                    completed_at
+                                )
+                                VALUES
+                                (
+                                    $1,
+                                    $2,
+                                    $3,
+                                    'completed',
+                                    NOW(),
+                                    NOW()
+                                )
+                                RETURNING id
+                                `,
+                                [
+                                    referrer.id,
+
+                                    user.id,
+
+                                    REFERRAL_REWARD
+                                ]
+                            );
+
+
+                        const referralId =
+                            referralResult
+                                .rows[0]
+                                .id;
+
+
+                        /* -------------------------------------
+                           ADD 250 COINS TO REFERRER
+                        ------------------------------------- */
 
                         await client.query(
                             `
@@ -446,16 +475,62 @@ router.post(
                             `,
                             [
                                 REFERRAL_REWARD,
+
                                 referrer.id
                             ]
                         );
 
 
-                        referralReward =
-                            REFERRAL_REWARD;
+                        /* -------------------------------------
+                           RECORD COIN TRANSACTION
+                        ------------------------------------- */
+
+                        await client.query(
+                            `
+                            INSERT INTO coin_transactions
+                            (
+                                user_id,
+                                type,
+                                amount,
+                                balance_before,
+                                balance_after,
+                                reference_id,
+                                description
+                            )
+                            VALUES
+                            (
+                                $1,
+                                $2,
+                                $3,
+                                $4,
+                                $5,
+                                $6,
+                                $7
+                            )
+                            `,
+                            [
+                                referrer.id,
+
+                                "referral",
+
+                                REFERRAL_REWARD,
+
+                                balanceBefore,
+
+                                balanceAfter,
+
+                                referralId,
+
+                                "Referral reward for inviting a new user."
+                            ]
+                        );
+
 
                         referralCreated =
                             true;
+
+                        referralReward =
+                            REFERRAL_REWARD;
 
                     }
 
@@ -464,11 +539,9 @@ router.post(
             }
 
 
-            /*
-            -------------------------------------------------
-            CREATE SERVER-SIDE SESSION
-            -------------------------------------------------
-            */
+            /* =================================================
+               CREATE SESSION
+            ================================================= */
 
             const sessionToken =
                 generateSessionToken();
@@ -523,11 +596,9 @@ router.post(
             );
 
 
-            /*
-            -------------------------------------------------
-            DELETE EXPIRED SESSIONS
-            -------------------------------------------------
-            */
+            /* =================================================
+               REMOVE EXPIRED SESSIONS
+            ================================================= */
 
             await client.query(
                 `
@@ -535,7 +606,9 @@ router.post(
                 WHERE user_id = $1
                   AND expires_at < NOW()
                 `,
-                [user.id]
+                [
+                    user.id
+                ]
             );
 
 
@@ -544,14 +617,9 @@ router.post(
             );
 
 
-            /*
-            -------------------------------------------------
-            IMPORTANT:
-            If this user received something else during
-            authentication in the future, the response
-            can still be extended here.
-            -------------------------------------------------
-            */
+            /* =================================================
+               RESPONSE
+            ================================================= */
 
             return res.json({
 
@@ -635,6 +703,7 @@ router.post(
 
                     lastDailyClaim:
                         user.last_daily_claim
+
                 }
 
             });
@@ -643,9 +712,11 @@ router.post(
         } catch (error) {
 
             try {
+
                 await client.query(
                     "ROLLBACK"
                 );
+
             } catch {
                 // Ignore rollback errors
             }
@@ -750,6 +821,7 @@ router.get(
 
                 lastDailyClaim:
                     req.user.last_daily_claim
+
             }
 
         });
@@ -775,13 +847,18 @@ router.post(
 
             if (
                 !header ||
-                !header.startsWith("Bearer ")
+                !header.startsWith(
+                    "Bearer "
+                )
             ) {
 
                 return res.status(401).json({
+
                     success: false,
+
                     error:
                         "Authentication token is required."
+
                 });
 
             }
@@ -796,9 +873,12 @@ router.post(
             if (!token) {
 
                 return res.status(401).json({
+
                     success: false,
+
                     error:
                         "Authentication token is required."
+
                 });
 
             }
@@ -813,7 +893,9 @@ router.post(
                 DELETE FROM auth_sessions
                 WHERE token_hash = $1
                 `,
-                [tokenHash]
+                [
+                    tokenHash
+                ]
             );
 
 
@@ -822,6 +904,7 @@ router.post(
                 success: true
 
             });
+
 
         } catch (error) {
 
