@@ -6,14 +6,18 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "worker": "node workers/withdrawal-worker.js",
     "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "dotenv": "^16.6.1",
+    "dotenv": "^16.4.7",
     "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
     "helmet": "^8.1.0",
-    "pg": "^8.16.3",
-    "express-rate-limit": "^8.1.0"
+    "pg": "^8.16.3"
   }
 }
