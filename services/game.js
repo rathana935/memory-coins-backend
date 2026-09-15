@@ -1,27 +1,57 @@
 import crypto from "crypto";
 import pool from "../db/pool.js";
 
+
 /*
 ============================================================
 MEMORY COINS - GAME SERVICE
-PART 2
 ============================================================
 
-Responsibilities:
+Features:
 
 - Start games
 - Consume lives
-- Recover lives after 1 hour
+- Recover lives
 - Complete games
-- Award game coins
+- Normal game rewards
+- Verified 2x reward support
 - Prevent duplicate rewards
 - Update difficulty levels
+- Update coin balance
 - Record coin transactions
+- Return life cooldown information
+
+IMPORTANT:
+
+Double reward MUST only be enabled after a real
+advertisement reward has been verified.
+
+Do NOT trust a simple frontend boolean.
 ============================================================
 */
 
 
 const MAX_LIVES = 5;
+
+
+/*
+============================================================
+LIFE COOLDOWN
+============================================================
+
+1 life is recovered every 60 minutes.
+
+Example:
+
+5 lives
+↓ play
+4 lives
+↓
+60 minutes
+↓
+5 lives
+============================================================
+*/
 
 const LIFE_COOLDOWN_MINUTES = 60;
 
@@ -40,24 +70,39 @@ GAME CONFIGURATION
 const GAME_CONFIG = {
 
     easy: {
+
         rows: 2,
+
         cols: 4,
+
         pairs: 4,
+
         reward: 10
+
     },
 
     medium: {
+
         rows: 3,
+
         cols: 4,
+
         pairs: 6,
+
         reward: 12
+
     },
 
     hard: {
+
         rows: 4,
+
         cols: 4,
+
         pairs: 8,
+
         reward: 15
+
     }
 
 };
@@ -70,7 +115,9 @@ HELPERS
 */
 
 
-function isValidDifficulty(difficulty) {
+function isValidDifficulty(
+    difficulty
+) {
 
     return Object.prototype.hasOwnProperty.call(
         GAME_CONFIG,
@@ -81,7 +128,9 @@ function isValidDifficulty(difficulty) {
 
 
 /*
-PostgreSQL completion_token is UUID.
+============================================================
+GENERATE COMPLETION TOKEN
+============================================================
 */
 
 function generateCompletionToken() {
@@ -92,12 +141,53 @@ function generateCompletionToken() {
 
 
 /*
-Convert database UUID/value to string.
+============================================================
+CONVERT GAME SESSION ID
+============================================================
 */
 
-function gameSessionId(value) {
+function gameSessionId(
+    value
+) {
 
     return String(value);
+
+}
+
+
+/*
+============================================================
+GET NEXT LIFE TIME
+============================================================
+
+If last_life_at represents when the first
+currently-recovering life was lost:
+
+nextLifeAt =
+last_life_at + 60 minutes
+============================================================
+*/
+
+function calculateNextLifeAt(
+    lastLifeAt
+) {
+
+    if (!lastLifeAt) {
+
+        return null;
+
+    }
+
+
+    return new Date(
+
+        new Date(
+            lastLifeAt
+        ).getTime() +
+
+        LIFE_COOLDOWN_MS
+
+    );
 
 }
 
@@ -107,35 +197,25 @@ function gameSessionId(value) {
 RECOVER LIVES
 ============================================================
 
-Rules:
+Maximum = 5
 
-Maximum lives = 5
-
-Example:
-
-5 lives
-↓
-start game
-↓
-4 lives
-
-After 1 hour
-↓
-5 lives
+Each completed cooldown gives 1 life.
 
 Example:
 
 0 lives
 +
-3 hours elapsed
+3 hours
 =
 3 lives
 
-Maximum is always 5.
+Example:
 
-The timer continues even when the user
-closes the app because last_life_at is
-stored in PostgreSQL.
+4 lives
++
+1 hour
+=
+5 lives
 ============================================================
 */
 
@@ -151,15 +231,22 @@ export async function recoverLives(
                 id,
                 lives,
                 last_life_at
+
             FROM users
+
             WHERE id = $1
+
             FOR UPDATE
             `,
-            [userId]
+            [
+                userId
+            ]
         );
 
 
-    if (result.rows.length === 0) {
+    if (
+        result.rows.length === 0
+    ) {
 
         throw new Error(
             "User not found"
@@ -173,7 +260,9 @@ export async function recoverLives(
 
 
     let lives =
-        Number(user.lives);
+        Number(
+            user.lives
+        );
 
 
     /*
@@ -182,28 +271,34 @@ export async function recoverLives(
     --------------------------------------------------------
     */
 
-    if (lives >= MAX_LIVES) {
+    if (
+        lives >= MAX_LIVES
+    ) {
 
-        if (user.last_life_at !== null) {
+        await client.query(
+            `
+            UPDATE users
 
-            await client.query(
-                `
-                UPDATE users
-                SET
-                    last_life_at = NULL
-                WHERE id = $1
-                `,
-                [userId]
-            );
+            SET last_life_at = NULL
 
-        }
+            WHERE id = $1
+            `,
+            [
+                userId
+            ]
+        );
 
 
         return {
 
-            lives: MAX_LIVES,
+            lives:
+                MAX_LIVES,
 
-            nextLifeAt: null
+            nextLifeAt:
+                null,
+
+            secondsUntilNextLife:
+                0
 
         };
 
@@ -212,17 +307,23 @@ export async function recoverLives(
 
     /*
     --------------------------------------------------------
-    No timer
+    No recovery timer
     --------------------------------------------------------
     */
 
-    if (!user.last_life_at) {
+    if (
+        !user.last_life_at
+    ) {
 
         return {
 
             lives,
 
-            nextLifeAt: null
+            nextLifeAt:
+                null,
+
+            secondsUntilNextLife:
+                null
 
         };
 
@@ -264,20 +365,40 @@ export async function recoverLives(
 
 
     /*
-    No complete hour yet.
+    --------------------------------------------------------
+    No life recovered yet
+    --------------------------------------------------------
     */
 
-    if (recoveredLives <= 0) {
+    if (
+        recoveredLives <= 0
+    ) {
+
+        const nextLifeAt =
+            calculateNextLifeAt(
+                user.last_life_at
+            );
+
+
+        const secondsUntilNextLife =
+            Math.max(
+                0,
+                Math.ceil(
+                    (
+                        nextLifeAt.getTime() -
+                        now.getTime()
+                    ) / 1000
+                )
+            );
+
 
         return {
 
             lives,
 
-            nextLifeAt:
-                new Date(
-                    lostAt.getTime() +
-                    LIFE_COOLDOWN_MS
-                )
+            nextLifeAt,
+
+            secondsUntilNextLife
 
         };
 
@@ -303,14 +424,18 @@ export async function recoverLives(
     --------------------------------------------------------
     */
 
-    if (newLives >= MAX_LIVES) {
+    if (
+        newLives >= MAX_LIVES
+    ) {
 
         await client.query(
             `
             UPDATE users
+
             SET
                 lives = $1,
                 last_life_at = NULL
+
             WHERE id = $2
             `,
             [
@@ -322,9 +447,14 @@ export async function recoverLives(
 
         return {
 
-            lives: MAX_LIVES,
+            lives:
+                MAX_LIVES,
 
-            nextLifeAt: null
+            nextLifeAt:
+                null,
+
+            secondsUntilNextLife:
+                0
 
         };
 
@@ -339,20 +469,25 @@ export async function recoverLives(
 
     const newLostAt =
         new Date(
+
             lostAt.getTime() +
+
             (
                 recoveredLives *
                 LIFE_COOLDOWN_MS
             )
+
         );
 
 
     await client.query(
         `
         UPDATE users
+
         SET
             lives = $1,
             last_life_at = $2
+
         WHERE id = $3
         `,
         [
@@ -364,17 +499,31 @@ export async function recoverLives(
 
 
     const nextLifeAt =
-        new Date(
-            newLostAt.getTime() +
-            LIFE_COOLDOWN_MS
+        calculateNextLifeAt(
+            newLostAt
+        );
+
+
+    const secondsUntilNextLife =
+        Math.max(
+            0,
+            Math.ceil(
+                (
+                    nextLifeAt.getTime() -
+                    now.getTime()
+                ) / 1000
+            )
         );
 
 
     return {
 
-        lives: newLives,
+        lives:
+            newLives,
 
-        nextLifeAt
+        nextLifeAt,
+
+        secondsUntilNextLife
 
     };
 
@@ -392,11 +541,11 @@ export async function startGame(
     difficulty
 ) {
 
-    /*
-    Validate difficulty.
-    */
-
-    if (!isValidDifficulty(difficulty)) {
+    if (
+        !isValidDifficulty(
+            difficulty
+        )
+    ) {
 
         throw new Error(
             "Invalid difficulty"
@@ -406,7 +555,9 @@ export async function startGame(
 
 
     const config =
-        GAME_CONFIG[difficulty];
+        GAME_CONFIG[
+            difficulty
+        ];
 
 
     const client =
@@ -422,7 +573,7 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        Recover expired lives first.
+        Recover lives before starting.
         ----------------------------------------------------
         */
 
@@ -435,11 +586,13 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        No lives
+        No lives.
         ----------------------------------------------------
         */
 
-        if (lifeState.lives <= 0) {
+        if (
+            lifeState.lives <= 0
+        ) {
 
             await client.query(
                 "ROLLBACK"
@@ -450,15 +603,20 @@ export async function startGame(
 
                 success: false,
 
-                error: "NO_LIVES",
+                error:
+                    "NO_LIVES",
 
                 message:
                     "No lives available.",
 
-                lives: 0,
+                lives:
+                    0,
 
                 nextLifeAt:
-                    lifeState.nextLifeAt
+                    lifeState.nextLifeAt,
+
+                secondsUntilNextLife:
+                    lifeState.secondsUntilNextLife
 
             };
 
@@ -467,17 +625,7 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        Consume ONE life.
-        ----------------------------------------------------
-
-        If user has 5 lives:
-
-        5 → 4
-
-        Start the recovery timer.
-
-        If user already has 4 lives,
-        keep the existing recovery timer.
+        Consume one life.
         ----------------------------------------------------
         */
 
@@ -485,19 +633,28 @@ export async function startGame(
             await client.query(
                 `
                 UPDATE users
+
                 SET
-                    lives = lives - 1,
+
+                    lives =
+                        lives - 1,
 
                     last_life_at =
+
                         CASE
+
                             WHEN lives = $1
+
                             THEN NOW()
+
                             ELSE last_life_at
+
                         END
 
                 WHERE id = $2
 
                 RETURNING
+
                     id,
                     lives,
                     last_life_at
@@ -526,7 +683,7 @@ export async function startGame(
 
         /*
         ----------------------------------------------------
-        Generate secure UUID completion token.
+        Generate completion token.
         ----------------------------------------------------
         */
 
@@ -590,11 +747,6 @@ export async function startGame(
         ----------------------------------------------------
         Create game session.
         ----------------------------------------------------
-
-        IMPORTANT:
-
-        Database column is reward_coins.
-        ----------------------------------------------------
         */
 
         const sessionResult =
@@ -625,6 +777,7 @@ export async function startGame(
                 )
 
                 RETURNING
+
                     id,
                     difficulty,
                     level,
@@ -709,11 +862,23 @@ export async function startGame(
 
             nextLifeAt:
                 user.last_life_at
-                    ? new Date(
-                        new Date(
-                            user.last_life_at
-                        ).getTime() +
-                        LIFE_COOLDOWN_MS
+                    ? calculateNextLifeAt(
+                        user.last_life_at
+                    )
+                    : null,
+
+            secondsUntilNextLife:
+                user.last_life_at
+                    ? Math.max(
+                        0,
+                        Math.ceil(
+                            (
+                                calculateNextLifeAt(
+                                    user.last_life_at
+                                ).getTime() -
+                                Date.now()
+                            ) / 1000
+                        )
                     )
                     : null
 
@@ -741,25 +906,38 @@ export async function startGame(
 COMPLETE GAME
 ============================================================
 
-Security:
+IMPORTANT SECURITY RULE:
 
-- Locks game session
-- Checks user
-- Checks completion token
-- Prevents duplicate completion
-- Gets reward from PostgreSQL
-- Never trusts reward from frontend
-- Updates balance atomically
-- Records transaction
+doubleRewardVerified MUST NOT simply come from:
+
+{
+    doubleRewardVerified: true
+}
+
+sent by the browser.
+
+It should be set only after the server verifies
+the ad reward.
+
+For now the function supports the verified flag
+so we can connect AdsGram in the next step.
 ============================================================
 */
 
 export async function completeGame({
+
     userId,
+
     gameId,
+
     completionToken,
+
     moves,
-    durationSeconds
+
+    durationSeconds,
+
+    doubleRewardVerified = false
+
 }) {
 
     const client =
@@ -783,6 +961,7 @@ export async function completeGame({
             await client.query(
                 `
                 SELECT
+
                     id,
                     user_id,
                     difficulty,
@@ -793,10 +972,13 @@ export async function completeGame({
                     started_at,
                     completed_at,
                     completion_token
+
                 FROM game_sessions
 
                 WHERE
+
                     id = $1
+
                     AND user_id = $2
 
                 FOR UPDATE
@@ -812,11 +994,6 @@ export async function completeGame({
             sessionResult.rows.length === 0
         ) {
 
-            await client.query(
-                "ROLLBACK"
-            );
-
-
             throw new Error(
                 "Game session not found"
             );
@@ -830,7 +1007,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        Prevent duplicate rewards.
+        Prevent duplicate completion.
         ----------------------------------------------------
         */
 
@@ -871,11 +1048,6 @@ export async function completeGame({
             session.completion_token
         ) {
 
-            await client.query(
-                "ROLLBACK"
-            );
-
-
             throw new Error(
                 "Invalid completion token"
             );
@@ -890,7 +1062,9 @@ export async function completeGame({
         */
 
         const parsedMoves =
-            Number(moves);
+            Number(
+                moves
+            );
 
 
         const safeMoves =
@@ -898,7 +1072,9 @@ export async function completeGame({
                 parsedMoves
             ) &&
             parsedMoves >= 0
+
                 ? parsedMoves
+
                 : 0;
 
 
@@ -919,22 +1095,21 @@ export async function completeGame({
                 parsedDuration
             ) &&
             parsedDuration >= 0
+
                 ? Math.floor(
                     parsedDuration
                 )
+
                 : 0;
 
 
         /*
         ----------------------------------------------------
-        IMPORTANT:
-
-        Reward comes from PostgreSQL,
-        not the browser.
+        NORMAL REWARD
         ----------------------------------------------------
         */
 
-        const reward =
+        const baseReward =
             Number(
                 session.reward_coins
             );
@@ -942,7 +1117,38 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        Get user's balance BEFORE reward.
+        DOUBLE REWARD
+        ----------------------------------------------------
+
+        Only use this after a verified advertisement.
+
+        Example:
+
+        Easy
+        10 → 20
+
+        Medium
+        12 → 24
+
+        Hard
+        15 → 30
+        ----------------------------------------------------
+        */
+
+        const rewardMultiplier =
+            doubleRewardVerified
+                ? 2
+                : 1;
+
+
+        const reward =
+            baseReward *
+            rewardMultiplier;
+
+
+        /*
+        ----------------------------------------------------
+        Get current balance.
         ----------------------------------------------------
         */
 
@@ -950,12 +1156,19 @@ export async function completeGame({
             await client.query(
                 `
                 SELECT
-                    coins
+
+                    coins,
+                    today_coins
+
                 FROM users
+
                 WHERE id = $1
+
                 FOR UPDATE
                 `,
-                [userId]
+                [
+                    userId
+                ]
             );
 
 
@@ -987,9 +1200,13 @@ export async function completeGame({
             UPDATE game_sessions
 
             SET
+
                 status = 'completed',
+
                 completed_at = NOW(),
+
                 moves = $1,
+
                 duration_seconds = $2
 
             WHERE id = $3
@@ -1004,7 +1221,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        Award coins.
+        UPDATE USER BALANCE
         ----------------------------------------------------
         */
 
@@ -1014,6 +1231,7 @@ export async function completeGame({
                 UPDATE users
 
                 SET
+
                     coins =
                         coins + $1,
 
@@ -1025,58 +1243,83 @@ export async function completeGame({
 
                     easy_games =
                         CASE
+
                             WHEN $2 = 'easy'
+
                             THEN easy_games + 1
+
                             ELSE easy_games
+
                         END,
 
                     medium_games =
                         CASE
+
                             WHEN $2 = 'medium'
+
                             THEN medium_games + 1
+
                             ELSE medium_games
+
                         END,
 
                     hard_games =
                         CASE
+
                             WHEN $2 = 'hard'
+
                             THEN hard_games + 1
+
                             ELSE hard_games
+
                         END,
 
                     easy_level =
                         CASE
+
                             WHEN $2 = 'easy'
+
                             THEN LEAST(
                                 100,
                                 easy_level + 1
                             )
+
                             ELSE easy_level
+
                         END,
 
                     medium_level =
                         CASE
+
                             WHEN $2 = 'medium'
+
                             THEN LEAST(
                                 100,
                                 medium_level + 1
                             )
+
                             ELSE medium_level
+
                         END,
 
                     hard_level =
                         CASE
+
                             WHEN $2 = 'hard'
+
                             THEN LEAST(
                                 100,
                                 hard_level + 1
                             )
+
                             ELSE hard_level
+
                         END
 
                 WHERE id = $3
 
                 RETURNING
+
                     coins,
                     today_coins,
                     games_played,
@@ -1113,14 +1356,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        Record game result.
-        ----------------------------------------------------
-
-        Database column:
-        reward_coins
-
-        Database timestamp:
-        completed_at
+        RECORD GAME RESULT
         ----------------------------------------------------
         */
 
@@ -1152,13 +1388,19 @@ export async function completeGame({
             `,
             [
                 userId,
+
                 gameId,
+
                 session.difficulty,
+
                 Number(
                     session.level
                 ),
+
                 reward,
+
                 safeMoves,
+
                 safeDuration
             ]
         );
@@ -1166,14 +1408,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        Record coin transaction.
-        ----------------------------------------------------
-
-        Your PostgreSQL schema requires:
-
-        balance_before
-        balance_after
-        reference_id UUID
+        RECORD COIN TRANSACTION
         ----------------------------------------------------
         */
 
@@ -1205,19 +1440,31 @@ export async function completeGame({
             `,
             [
                 userId,
-                "game_reward",
+
+                doubleRewardVerified
+                    ? "game_reward_2x"
+                    : "game_reward",
+
                 reward,
+
                 balanceBefore,
+
                 balanceAfter,
+
                 gameId,
-                `Completed ${session.difficulty} memory game`
+
+                doubleRewardVerified
+
+                    ? `Completed ${session.difficulty} memory game with verified ad 2x reward`
+
+                    : `Completed ${session.difficulty} memory game`
             ]
         );
 
 
         /*
         ----------------------------------------------------
-        Commit EVERYTHING together.
+        COMMIT
         ----------------------------------------------------
         */
 
@@ -1228,7 +1475,7 @@ export async function completeGame({
 
         /*
         ----------------------------------------------------
-        Return result.
+        RETURN UPDATED BALANCE
         ----------------------------------------------------
         */
 
@@ -1237,6 +1484,14 @@ export async function completeGame({
             success: true,
 
             reward,
+
+            baseReward,
+
+            multiplier:
+                rewardMultiplier,
+
+            doubleReward:
+                doubleRewardVerified,
 
             difficulty:
                 session.difficulty,
@@ -1306,7 +1561,7 @@ export async function getGameStatus(
 
         /*
         ----------------------------------------------------
-        Recover lives first.
+        Recover lives.
         ----------------------------------------------------
         */
 
@@ -1319,7 +1574,7 @@ export async function getGameStatus(
 
         /*
         ----------------------------------------------------
-        Get user status.
+        Get user data.
         ----------------------------------------------------
         */
 
@@ -1327,21 +1582,36 @@ export async function getGameStatus(
             await client.query(
                 `
                 SELECT
+
                     id,
+
                     coins,
+
                     today_coins,
+
                     games_played,
+
                     easy_games,
+
                     medium_games,
+
                     hard_games,
+
                     easy_level,
+
                     medium_level,
+
                     hard_level,
+
                     lives
+
                 FROM users
+
                 WHERE id = $1
                 `,
-                [userId]
+                [
+                    userId
+                ]
             );
 
 
@@ -1367,7 +1637,7 @@ export async function getGameStatus(
 
         /*
         ----------------------------------------------------
-        Return status.
+        RETURN STATUS
         ----------------------------------------------------
         */
 
@@ -1434,7 +1704,16 @@ export async function getGameStatus(
                 ),
 
             nextLifeAt:
-                lifeState.nextLifeAt
+                lifeState.nextLifeAt,
+
+            secondsUntilNextLife:
+                lifeState.secondsUntilNextLife,
+
+            lifeCooldownMinutes:
+                LIFE_COOLDOWN_MINUTES,
+
+            maxLives:
+                MAX_LIVES
 
         };
 
