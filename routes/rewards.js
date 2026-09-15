@@ -57,6 +57,8 @@ function handleError(
 
         INVALID_GAME_SESSION: 400,
 
+        INVALID_GAME_REWARD: 400,
+
         ALREADY_CLAIMED: 409,
 
         MAX_LIVES: 409,
@@ -69,25 +71,29 @@ function handleError(
 
         AD_ALREADY_CONSUMED: 409,
 
-        LUCKY_ROLL_COOLDOWN: 429,
-
-        INVALID_GAME_REWARD: 400
+        LUCKY_ROLL_COOLDOWN: 429
 
     };
 
 
     const status =
-        statusMap[error.code] || 500;
+        statusMap[
+            error.code
+        ] || 500;
 
 
     const response = {
+
         success: false,
+
         code:
             error.code ||
             "INTERNAL_ERROR",
+
         message:
             error.message ||
             "Something went wrong."
+
     };
 
 
@@ -123,14 +129,14 @@ Body:
     "adType": "life"
 }
 
-or:
+OR:
 
 {
     "adType": "double_reward",
     "gameSessionId": "UUID"
 }
 
-or:
+OR:
 
 {
     "adType": "lucky_roll"
@@ -204,13 +210,6 @@ router.post(
 
 /* =========================================================
    CLAIM +1 LIFE
-=========================================================
-
-POST /api/rewards/life
-
-The ad must already be verified by the
-AdsGram Reward URL.
-
 ========================================================= */
 
 router.post(
@@ -244,10 +243,6 @@ router.post(
 
 /* =========================================================
    DAILY BONUS
-=========================================================
-
-POST /api/rewards/daily
-
 ========================================================= */
 
 router.post(
@@ -281,13 +276,6 @@ router.post(
 
 /* =========================================================
    LUCKY ROLL
-=========================================================
-
-POST /api/rewards/lucky-roll
-
-The user must have a verified AdsGram
-lucky_roll reward.
-
 ========================================================= */
 
 router.post(
@@ -321,25 +309,6 @@ router.post(
 
 /* =========================================================
    DOUBLE GAME REWARD
-=========================================================
-
-POST /api/rewards/double-game-reward
-
-Body:
-
-{
-    "gameSessionId": "UUID"
-}
-
-The server verifies:
-
-1. User owns game session
-2. Game is completed
-3. Game reward is valid
-4. AdsGram reward is verified
-5. Verified ad belongs to this game
-6. Ad has not already been consumed
-
 ========================================================= */
 
 router.post(
@@ -399,18 +368,6 @@ router.post(
 
 /* =========================================================
    REWARD STATUS
-=========================================================
-
-GET /api/rewards/status
-
-Returns:
-
-- coins
-- lives
-- max lives
-- daily bonus status
-- verified AdsGram rewards
-
 ========================================================= */
 
 router.get(
