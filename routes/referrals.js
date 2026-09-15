@@ -2,33 +2,77 @@ import express from "express";
 
 import pool from "../db/pool.js";
 
-import {
-    requireAuth
-} from "../middleware/auth.js";
-
 const router = express.Router();
-
 
 /* =========================================================
    CONFIG
 ========================================================= */
 
-const REFERRAL_REWARD = 250;
-
+const DEFAULT_REFERRAL_REWARD = 250;
 
 /*
-Change this to your actual Telegram bot username.
+   Your Telegram Bot username.
 
-Example:
+   Example:
+   TELEGRAM_BOT_USERNAME=MemoryCoinsBot
 
-const TELEGRAM_BOT_USERNAME = "MemoryCoinsBot";
-
-Do NOT include @.
+   Do NOT include @.
 */
 
 const TELEGRAM_BOT_USERNAME =
     process.env.TELEGRAM_BOT_USERNAME ||
     "YOUR_BOT_USERNAME";
+
+
+/* =========================================================
+   GET REFERRAL REWARD CONFIG
+========================================================= */
+
+async function getReferralReward() {
+
+    try {
+
+        const result =
+            await pool.query(
+                `
+                SELECT value
+                FROM app_settings
+                WHERE key = 'referral'
+                LIMIT 1
+                `
+            );
+
+        if (
+            result.rows.length > 0 &&
+            result.rows[0].value
+        ) {
+
+            const settings =
+                result.rows[0].value;
+
+            const reward =
+                Number(
+                    settings.reward_coins
+                );
+
+            if (
+                Number.isInteger(reward) &&
+                reward > 0
+            ) {
+                return reward;
+            }
+        }
+
+    } catch (error) {
+
+        console.error(
+            "Referral settings error:",
+            error
+        );
+    }
+
+    return DEFAULT_REFERRAL_REWARD;
+}
 
 
 /* =========================================================
@@ -39,13 +83,15 @@ const TELEGRAM_BOT_USERNAME =
 
 router.get(
     "/",
-    requireAuth,
     async (req, res) => {
 
         try {
 
             const userId =
                 req.user.user_id;
+
+            const referralReward =
+                await getReferralReward();
 
 
             /* ---------------------------------------------
@@ -143,7 +189,7 @@ router.get(
                         referralLink,
 
                     rewardPerInvite:
-                        REFERRAL_REWARD,
+                        referralReward,
 
                     count:
                         Number(
@@ -220,10 +266,13 @@ router.get(
 
 router.get(
     "/stats",
-    requireAuth,
     async (req, res) => {
 
         try {
+
+            const referralReward =
+                await getReferralReward();
+
 
             const result =
                 await pool.query(
@@ -269,7 +318,7 @@ router.get(
                     ),
 
                 rewardPerInvite:
-                    REFERRAL_REWARD
+                    referralReward
 
             });
 
