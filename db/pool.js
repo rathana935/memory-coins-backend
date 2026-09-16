@@ -15,28 +15,64 @@ if (!process.env.DATABASE_URL) {
 
 
 /* =========================================================
-   DATABASE CONFIGURATION
+   ENVIRONMENT
 ========================================================= */
 
 const isProduction =
     process.env.NODE_ENV === "production";
 
 
+/* =========================================================
+   SAFE NUMBER HELPER
+========================================================= */
+
+function getPositiveNumber(
+    value,
+    fallback
+) {
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number) ||
+        number <= 0
+    ) {
+        return fallback;
+    }
+
+    return number;
+}
+
+
+/* =========================================================
+   DATABASE CONFIGURATION
+========================================================= */
+
 const maxConnections =
-    Number(
-        process.env.DB_POOL_MAX || 20
+    Math.floor(
+        getPositiveNumber(
+            process.env.DB_POOL_MAX,
+            10
+        )
     );
 
 
 const idleTimeoutMillis =
-    Number(
-        process.env.DB_IDLE_TIMEOUT_MS || 30000
+    Math.floor(
+        getPositiveNumber(
+            process.env.DB_IDLE_TIMEOUT_MS,
+            30000
+        )
     );
 
 
 const connectionTimeoutMillis =
-    Number(
-        process.env.DB_CONNECTION_TIMEOUT_MS || 10000
+    Math.floor(
+        getPositiveNumber(
+            process.env.DB_CONNECTION_TIMEOUT_MS,
+            10000
+        )
     );
 
 
@@ -44,27 +80,28 @@ const connectionTimeoutMillis =
    POSTGRESQL CONNECTION POOL
 ========================================================= */
 
-const pool = new Pool({
+const pool =
+    new Pool({
 
-    connectionString:
-        process.env.DATABASE_URL,
+        connectionString:
+            process.env.DATABASE_URL,
 
-    max:
-        maxConnections,
+        max:
+            maxConnections,
 
-    idleTimeoutMillis:
-        idleTimeoutMillis,
+        idleTimeoutMillis:
+            idleTimeoutMillis,
 
-    connectionTimeoutMillis:
-        connectionTimeoutMillis,
+        connectionTimeoutMillis:
+            connectionTimeoutMillis,
 
-    ssl:
-        isProduction
-            ? {
-                rejectUnauthorized: false
-            }
-            : false
-});
+        ssl:
+            isProduction
+                ? {
+                    rejectUnauthorized: false
+                }
+                : false
+    });
 
 
 /* =========================================================
@@ -79,8 +116,34 @@ pool.on(
             "Unexpected PostgreSQL pool error:",
             error
         );
+
     }
 );
+
+
+/* =========================================================
+   OPTIONAL CONNECTION TEST
+========================================================= */
+
+export async function testDatabaseConnection() {
+
+    const client =
+        await pool.connect();
+
+    try {
+
+        await client.query(
+            "SELECT 1"
+        );
+
+        return true;
+
+    } finally {
+
+        client.release();
+
+    }
+}
 
 
 /* =========================================================
