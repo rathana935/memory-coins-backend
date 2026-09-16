@@ -2,109 +2,115 @@ import pool from "../db/pool.js";
 
 /*
 =========================================================
-MEMORY CARD / MEMORY COINS
+MEMORY CARD
 WITHDRAWAL SERVICE
 =========================================================
 
-Economy:
-  10,000 coins = $1
+ECONOMY
 
-Minimum withdrawal:
-  2,500 coins
+10,000 coins = $1
 
-Providers:
-  - FaucetPay
-  - ABA Bank
+MINIMUM
 
-IMPORTANT:
-  This service creates secure PENDING withdrawals.
+2,500 coins
 
-  It does NOT automatically send money.
+PAYMENT METHOD
 
-  Actual FaucetPay / ABA payout processing should be
-  handled by a separate payout worker or admin system.
+FaucetPay ONLY
 
-SECURITY:
-  - User row locked with FOR UPDATE
-  - Balance checked inside transaction
-  - Active withdrawals prevented
-  - Coins deducted atomically
-  - Coin transaction recorded
-  - Provider-specific details validated
+IMPORTANT
+
+This service:
+
+- verifies the authenticated user
+- locks the user row
+- checks balance inside a transaction
+- prevents multiple active withdrawals
+- deducts coins atomically
+- creates the withdrawal record
+- creates the coin transaction record
+- rolls everything back if anything fails
+
+This service DOES NOT automatically send money.
+
+Actual FaucetPay payout should be handled separately
+by an admin/payout worker.
 =========================================================
 */
 
 
 /* =========================================================
-   WITHDRAWAL CONFIG
+   CONFIGURATION
 ========================================================= */
 
 const COINS_PER_USD = 10000;
+
 const MINIMUM_WITHDRAWAL = 2500;
 
-const PROVIDERS = {
-  FAUCETPAY: "faucetpay",
-  ABA: "aba"
-};
+const PROVIDER = "faucetpay";
 
 
 /* =========================================================
-   VALIDATE FAUCETPAY EMAIL
+   EMAIL VALIDATION
 ========================================================= */
 
 function validateEmail(email) {
-  if (typeof email !== "string") {
-    return false;
-  }
 
-  const value = email.trim().toLowerCase();
+    if (
+        typeof email !== "string"
+    ) {
+        return false;
+    }
 
-  if (value.length < 5 || value.length > 254) {
-    return false;
-  }
 
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    const value =
+        email
+            .trim()
+            .toLowerCase();
+
+
+    if (
+        value.length < 5 ||
+        value.length > 254
+    ) {
+        return false;
+    }
+
+
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        .test(value);
 }
 
 
 /* =========================================================
-   VALIDATE ABA ACCOUNT NUMBER
+   NORMALIZE EMAIL
 ========================================================= */
 
-function validateAbaAccountNumber(accountNumber) {
-  if (
-    typeof accountNumber !== "string" &&
-    typeof accountNumber !== "number"
-  ) {
-    return false;
-  }
+function normalizeEmail(email) {
 
-  const value = String(accountNumber).trim();
+    return String(email)
+        .trim()
+        .toLowerCase();
 
-  if (value.length < 6 || value.length > 30) {
-    return false;
-  }
-
-  return /^[0-9]+$/.test(value);
 }
 
 
 /* =========================================================
-   VALIDATE ABA ACCOUNT HOLDER NAME
+   VALIDATE USER ID
 ========================================================= */
 
-function validateAbaAccountName(accountName) {
-  if (typeof accountName !== "string") {
-    return false;
-  }
+function validateUserId(userId) {
 
-  const value = accountName.trim();
+    if (
+        userId === null ||
+        userId === undefined ||
+        userId === ""
+    ) {
+        return false;
+    }
 
-  if (value.length < 2 || value.length > 150) {
-    return false;
-  }
 
-  return true;
+    return true;
 }
 
 
@@ -113,30 +119,12 @@ function validateAbaAccountName(accountName) {
 ========================================================= */
 
 function coinsToUsd(coins) {
-  return Number(coins) / COINS_PER_USD;
-}
 
+    return (
+        Number(coins) /
+        COINS_PER_USD
+    );
 
-/* =========================================================
-   NORMALIZE PROVIDER
-========================================================= */
-
-function normalizeProvider(provider) {
-  if (typeof provider !== "string") {
-    return null;
-  }
-
-  const value = provider.trim().toLowerCase();
-
-  if (value === PROVIDERS.FAUCETPAY) {
-    return PROVIDERS.FAUCETPAY;
-  }
-
-  if (value === PROVIDERS.ABA) {
-    return PROVIDERS.ABA;
-  }
-
-  return null;
 }
 
 
@@ -145,488 +133,752 @@ function normalizeProvider(provider) {
 ========================================================= */
 
 function maskEmail(email) {
-  if (!email) {
-    return null;
-  }
 
-  const value = String(email);
+    if (!email) {
+        return null;
+    }
 
-  const atIndex = value.indexOf("@");
 
-  if (atIndex <= 0) {
-    return "***";
-  }
+    const value =
+        String(email);
 
-  const name = value.substring(0, atIndex);
-  const domain = value.substring(atIndex + 1);
 
-  if (name.length <= 2) {
-    return `*${domain ? `@${domain}` : ""}`;
-  }
+    const atIndex =
+        value.indexOf("@");
 
-  return (
-    name.substring(0, 2) +
-    "***" +
-    (domain ? `@${domain}` : "")
-  );
+
+    if (
+        atIndex <= 0
+    ) {
+        return "***";
+    }
+
+
+    const name =
+        value.substring(
+            0,
+            atIndex
+        );
+
+
+    const domain =
+        value.substring(
+            atIndex + 1
+        );
+
+
+    if (
+        name.length <= 2
+    ) {
+
+        return (
+            "*" +
+            `@${domain}`
+        );
+
+    }
+
+
+    return (
+        name.substring(0, 2) +
+        "***@" +
+        domain
+    );
+
 }
 
 
 /* =========================================================
-   MASK ABA ACCOUNT NUMBER
+   FORMAT WITHDRAWAL
 ========================================================= */
 
-function maskAbaAccountNumber(accountNumber) {
-  if (!accountNumber) {
-    return null;
-  }
+function formatWithdrawal(
+    row,
+    includeSensitive = false
+) {
 
-  const value = String(accountNumber);
-
-  if (value.length <= 3) {
-    return "*".repeat(value.length);
-  }
-
-  return (
-    "*".repeat(value.length - 3) +
-    value.slice(-3)
-  );
-}
+    if (!row) {
+        return null;
+    }
 
 
-/* =========================================================
-   FORMAT WITHDRAWAL FOR API
-========================================================= */
+    return {
 
-function formatWithdrawal(row, includeSensitive = false) {
-  if (!row) {
-    return null;
-  }
+        id:
+            row.id,
 
-  return {
-    id: row.id,
+        provider:
+            row.provider,
 
-    provider: row.provider,
+        amountCoins:
+            Number(
+                row.amount_coins
+            ),
 
-    amountCoins: Number(row.amount_coins),
+        amountUsd:
+            Number(
+                row.amount_usd
+            ),
 
-    amountUsd: Number(row.amount_usd),
+        faucetpayEmail:
+            includeSensitive
+                ? row.faucetpay_email
+                : maskEmail(
+                    row.faucetpay_email
+                ),
 
-    faucetpayEmail: includeSensitive
-      ? row.faucetpay_email
-      : maskEmail(row.faucetpay_email),
+        status:
+            row.status,
 
-    abaAccountNumber: includeSensitive
-      ? row.aba_account_number
-      : maskAbaAccountNumber(
-          row.aba_account_number
-        ),
+        providerTransactionId:
+            row.provider_transaction_id ||
+            null,
 
-    abaAccountName:
-      row.aba_account_name || null,
+        failureReason:
+            row.failure_reason ||
+            null,
 
-    status: row.status,
+        requestedAt:
+            row.requested_at,
 
-    providerTransactionId:
-      row.provider_transaction_id || null,
+        processedAt:
+            row.processed_at ||
+            null,
 
-    failureReason:
-      row.failure_reason || null,
+        updatedAt:
+            row.updated_at ||
+            null
 
-    requestedAt:
-      row.requested_at,
+    };
 
-    processedAt:
-      row.processed_at || null,
-
-    updatedAt:
-      row.updated_at || null
-  };
 }
 
 
 /* =========================================================
    CREATE WITHDRAWAL
-========================================================= */
+=========================================================
 
-export async function createWithdrawal(
-  userId,
-  coins,
-  provider,
-  paymentDetails = {}
-) {
-  const amountCoins = Number(coins);
+EXPECTED INPUT
 
+createWithdrawal({
+    userId,
+    amountCoins,
+    provider,
+    faucetpayEmail
+})
 
-  /* -------------------------------------------------------
-     VALIDATE AMOUNT
-  ------------------------------------------------------- */
+=========================================================
+*/
 
-  if (
-    !Number.isSafeInteger(amountCoins) ||
-    amountCoins <= 0
-  ) {
-    throw new Error("INVALID_AMOUNT");
-  }
+export async function createWithdrawal({
 
-  if (
-    amountCoins < MINIMUM_WITHDRAWAL
-  ) {
-    throw new Error("MINIMUM_WITHDRAWAL");
-  }
+    userId,
 
+    amountCoins,
 
-  /* -------------------------------------------------------
-     VALIDATE PROVIDER
-  ------------------------------------------------------- */
+    provider,
 
-  const normalizedProvider =
-    normalizeProvider(provider);
+    faucetpayEmail
 
-  if (!normalizedProvider) {
-    throw new Error("INVALID_PROVIDER");
-  }
+}) {
 
+    /* =====================================================
+       VALIDATE USER
+    ===================================================== */
 
-  let faucetpayEmail = null;
-  let abaAccountNumber = null;
-  let abaAccountName = null;
-
-
-  /* =======================================================
-     FAUCETPAY
-  ======================================================= */
-
-  if (
-    normalizedProvider ===
-    PROVIDERS.FAUCETPAY
-  ) {
     if (
-      !validateEmail(
-        paymentDetails.faucetpayEmail
-      )
+        !validateUserId(userId)
     ) {
-      throw new Error("INVALID_EMAIL");
+
+        const error =
+            new Error(
+                "User authentication is required."
+            );
+
+        error.code =
+            "AUTHENTICATION_REQUIRED";
+
+        error.statusCode =
+            401;
+
+        throw error;
+
     }
 
-    faucetpayEmail =
-      paymentDetails.faucetpayEmail
+
+    /* =====================================================
+       VALIDATE AMOUNT
+    ===================================================== */
+
+    const coins =
+        Number(amountCoins);
+
+
+    if (
+        !Number.isSafeInteger(coins)
+    ) {
+
+        const error =
+            new Error(
+                "Withdrawal amount must be a whole number of coins."
+            );
+
+        error.code =
+            "INVALID_AMOUNT";
+
+        error.statusCode =
+            400;
+
+        throw error;
+
+    }
+
+
+    if (
+        coins <= 0
+    ) {
+
+        const error =
+            new Error(
+                "Withdrawal amount must be greater than zero."
+            );
+
+        error.code =
+            "INVALID_AMOUNT";
+
+        error.statusCode =
+            400;
+
+        throw error;
+
+    }
+
+
+    /* =====================================================
+       MINIMUM
+    ===================================================== */
+
+    if (
+        coins <
+        MINIMUM_WITHDRAWAL
+    ) {
+
+        const error =
+            new Error(
+                `Minimum withdrawal is ${MINIMUM_WITHDRAWAL.toLocaleString()} coins.`
+            );
+
+        error.code =
+            "MINIMUM_WITHDRAWAL";
+
+        error.statusCode =
+            400;
+
+        throw error;
+
+    }
+
+
+    /* =====================================================
+       PROVIDER
+    ===================================================== */
+
+    const normalizedProvider =
+        String(
+            provider || ""
+        )
         .trim()
         .toLowerCase();
-  }
 
-
-  /* =======================================================
-     ABA BANK
-  ======================================================= */
-
-  if (
-    normalizedProvider ===
-    PROVIDERS.ABA
-  ) {
-    if (
-      !validateAbaAccountNumber(
-        paymentDetails.abaAccountNumber
-      )
-    ) {
-      throw new Error(
-        "INVALID_ABA_ACCOUNT"
-      );
-    }
 
     if (
-      !validateAbaAccountName(
-        paymentDetails.abaAccountName
-      )
+        normalizedProvider !==
+        PROVIDER
     ) {
-      throw new Error(
-        "INVALID_ABA_NAME"
-      );
-    }
 
-    abaAccountNumber =
-      String(
-        paymentDetails.abaAccountNumber
-      ).trim();
+        const error =
+            new Error(
+                "Only FaucetPay withdrawals are supported."
+            );
 
-    abaAccountName =
-      paymentDetails.abaAccountName.trim();
-  }
+        error.code =
+            "INVALID_PROVIDER";
 
+        error.statusCode =
+            400;
 
-  /* =======================================================
-     DATABASE TRANSACTION
-  ======================================================= */
+        throw error;
 
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-
-    /* =====================================================
-       LOCK USER
-    ===================================================== */
-
-    const userResult =
-      await client.query(
-        `
-        SELECT
-          id,
-          coins,
-          is_blocked
-        FROM users
-        WHERE id = $1
-        FOR UPDATE
-        `,
-        [userId]
-      );
-
-    if (userResult.rowCount === 0) {
-      throw new Error("USER_NOT_FOUND");
-    }
-
-    const user =
-      userResult.rows[0];
-
-
-    /* =====================================================
-       BLOCKED ACCOUNT
-    ===================================================== */
-
-    if (user.is_blocked) {
-      throw new Error(
-        "ACCOUNT_BLOCKED"
-      );
     }
 
 
     /* =====================================================
-       CURRENT BALANCE
-    ===================================================== */
-
-    const currentBalance =
-      Number(user.coins);
-
-
-    /* =====================================================
-       CHECK BALANCE
+       FAUCETPAY EMAIL
     ===================================================== */
 
     if (
-      currentBalance <
-      amountCoins
-    ) {
-      throw new Error(
-        "INSUFFICIENT_BALANCE"
-      );
-    }
-
-
-    /* =====================================================
-       PREVENT MULTIPLE ACTIVE WITHDRAWALS
-    ===================================================== */
-
-    const pendingResult =
-      await client.query(
-        `
-        SELECT id
-        FROM withdrawals
-        WHERE user_id = $1
-          AND status IN (
-            'pending',
-            'processing'
-          )
-        LIMIT 1
-        `,
-        [userId]
-      );
-
-    if (
-      pendingResult.rowCount > 0
-    ) {
-      throw new Error(
-        "WITHDRAWAL_PENDING"
-      );
-    }
-
-
-    /* =====================================================
-       CALCULATE USD
-    ===================================================== */
-
-    const usdAmount =
-      coinsToUsd(amountCoins);
-
-
-    /* =====================================================
-       NEW BALANCE
-    ===================================================== */
-
-    const newBalance =
-      currentBalance -
-      amountCoins;
-
-
-    /* =====================================================
-       DEDUCT COINS
-    ===================================================== */
-
-    await client.query(
-      `
-      UPDATE users
-      SET
-        coins = $1,
-        updated_at = NOW()
-      WHERE id = $2
-      `,
-      [
-        newBalance,
-        userId
-      ]
-    );
-
-
-    /* =====================================================
-       CREATE WITHDRAWAL
-    ===================================================== */
-
-    const withdrawalResult =
-      await client.query(
-        `
-        INSERT INTO withdrawals (
-          user_id,
-          provider,
-          amount_coins,
-          amount_usd,
-          faucetpay_email,
-          aba_account_number,
-          aba_account_name,
-          status,
-          requested_at,
-          updated_at
+        !validateEmail(
+            faucetpayEmail
         )
-        VALUES (
-          $1,
-          $2,
-          $3,
-          $4,
-          $5,
-          $6,
-          $7,
-          'pending',
-          NOW(),
-          NOW()
-        )
-        RETURNING
-          id,
-          provider,
-          amount_coins,
-          amount_usd,
-          faucetpay_email,
-          aba_account_number,
-          aba_account_name,
-          status,
-          provider_transaction_id,
-          failure_reason,
-          requested_at,
-          processed_at,
-          updated_at
-        `,
-        [
-          userId,
-          normalizedProvider,
-          amountCoins,
-          usdAmount,
-          faucetpayEmail,
-          abaAccountNumber,
-          abaAccountName
-        ]
-      );
+    ) {
+
+        const error =
+            new Error(
+                "A valid FaucetPay email is required."
+            );
+
+        error.code =
+            "INVALID_FAUCETPAY_EMAIL";
+
+        error.statusCode =
+            400;
+
+        throw error;
+
+    }
 
 
-    const withdrawal =
-      withdrawalResult.rows[0];
+    const email =
+        normalizeEmail(
+            faucetpayEmail
+        );
 
 
     /* =====================================================
-       RECORD COIN TRANSACTION
+       USD VALUE
     ===================================================== */
 
-    const description =
-      normalizedProvider ===
-      PROVIDERS.FAUCETPAY
-        ? `FaucetPay withdrawal request: ${amountCoins} coins`
-        : `ABA Bank withdrawal request: ${amountCoins} coins`;
-
-    await client.query(
-      `
-      INSERT INTO coin_transactions (
-        user_id,
-        type,
-        amount,
-        balance_before,
-        balance_after,
-        reference_id,
-        description
-      )
-      VALUES (
-        $1,
-        'withdrawal',
-        $2,
-        $3,
-        $4,
-        $5,
-        $6
-      )
-      `,
-      [
-        userId,
-        -amountCoins,
-        currentBalance,
-        newBalance,
-        withdrawal.id,
-        description
-      ]
-    );
+    const amountUsd =
+        coinsToUsd(
+            coins
+        );
 
 
     /* =====================================================
-       COMMIT
+       DATABASE CONNECTION
     ===================================================== */
 
-    await client.query(
-      "COMMIT"
-    );
+    const client =
+        await pool.connect();
 
 
-    /* =====================================================
-       RETURN SAFE RESPONSE
-    ===================================================== */
+    try {
 
-    return {
-      ...formatWithdrawal(
-        withdrawal,
-        false
-      ),
+        /* =================================================
+           START TRANSACTION
+        ================================================= */
 
-      newBalance
-    };
+        await client.query(
+            "BEGIN"
+        );
 
 
-  } catch (error) {
+        /* =================================================
+           LOCK USER ROW
+        ================================================= */
 
-    await client.query(
-      "ROLLBACK"
-    );
+        const userResult =
+            await client.query(
 
-    throw error;
+                `
+                SELECT
+                    id,
+                    coins,
+                    is_blocked
+                FROM users
+                WHERE id = $1
+                FOR UPDATE
+                `,
 
-  } finally {
+                [userId]
 
-    client.release();
+            );
 
-  }
+
+        if (
+            userResult.rowCount === 0
+        ) {
+
+            const error =
+                new Error(
+                    "User not found."
+                );
+
+            error.code =
+                "USER_NOT_FOUND";
+
+            error.statusCode =
+                404;
+
+            throw error;
+
+        }
+
+
+        const user =
+            userResult.rows[0];
+
+
+        /* =================================================
+           BLOCKED USER
+        ================================================= */
+
+        if (
+            user.is_blocked === true
+        ) {
+
+            const error =
+                new Error(
+                    "This account is blocked."
+                );
+
+            error.code =
+                "ACCOUNT_BLOCKED";
+
+            error.statusCode =
+                403;
+
+            throw error;
+
+        }
+
+
+        /* =================================================
+           CURRENT BALANCE
+        ================================================= */
+
+        const currentBalance =
+            Number(
+                user.coins
+            );
+
+
+        if (
+            !Number.isSafeInteger(
+                currentBalance
+            )
+        ) {
+
+            const error =
+                new Error(
+                    "Invalid account balance."
+                );
+
+            error.code =
+                "INVALID_BALANCE";
+
+            error.statusCode =
+                500;
+
+            throw error;
+
+        }
+
+
+        /* =================================================
+           BALANCE CHECK
+        ================================================= */
+
+        if (
+            currentBalance <
+            coins
+        ) {
+
+            const error =
+                new Error(
+                    "Insufficient coin balance."
+                );
+
+            error.code =
+                "INSUFFICIENT_BALANCE";
+
+            error.statusCode =
+                400;
+
+            throw error;
+
+        }
+
+
+        /* =================================================
+           PREVENT MULTIPLE ACTIVE WITHDRAWALS
+        ================================================= */
+
+        const pendingResult =
+            await client.query(
+
+                `
+                SELECT
+                    id
+                FROM withdrawals
+                WHERE user_id = $1
+                  AND status IN (
+                      'pending',
+                      'processing'
+                  )
+                LIMIT 1
+                `,
+
+                [userId]
+
+            );
+
+
+        if (
+            pendingResult.rowCount > 0
+        ) {
+
+            const error =
+                new Error(
+                    "You already have a withdrawal being processed."
+                );
+
+            error.code =
+                "WITHDRAWAL_PENDING";
+
+            error.statusCode =
+                409;
+
+            throw error;
+
+        }
+
+
+        /* =================================================
+           NEW BALANCE
+        ================================================= */
+
+        const newBalance =
+            currentBalance -
+            coins;
+
+
+        /* =================================================
+           DEDUCT COINS
+        ================================================= */
+
+        await client.query(
+
+            `
+            UPDATE users
+
+            SET
+                coins = $1,
+                updated_at = NOW()
+
+            WHERE id = $2
+            `,
+
+            [
+                newBalance,
+                userId
+            ]
+
+        );
+
+
+        /* =================================================
+           CREATE WITHDRAWAL
+        ================================================= */
+
+        const withdrawalResult =
+            await client.query(
+
+                `
+                INSERT INTO withdrawals (
+
+                    user_id,
+
+                    provider,
+
+                    amount_coins,
+
+                    amount_usd,
+
+                    faucetpay_email,
+
+                    status,
+
+                    requested_at,
+
+                    updated_at
+
+                )
+
+                VALUES (
+
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5,
+                    'pending',
+                    NOW(),
+                    NOW()
+
+                )
+
+                RETURNING
+
+                    id,
+
+                    provider,
+
+                    amount_coins,
+
+                    amount_usd,
+
+                    faucetpay_email,
+
+                    status,
+
+                    provider_transaction_id,
+
+                    failure_reason,
+
+                    requested_at,
+
+                    processed_at,
+
+                    updated_at
+                `,
+
+                [
+                    userId,
+                    PROVIDER,
+                    coins,
+                    amountUsd,
+                    email
+                ]
+
+            );
+
+
+        const withdrawal =
+            withdrawalResult.rows[0];
+
+
+        /* =================================================
+           COIN TRANSACTION
+        ================================================= */
+
+        await client.query(
+
+            `
+            INSERT INTO coin_transactions (
+
+                user_id,
+
+                type,
+
+                amount,
+
+                balance_before,
+
+                balance_after,
+
+                reference_id,
+
+                description
+
+            )
+
+            VALUES (
+
+                $1,
+
+                'withdrawal',
+
+                $2,
+
+                $3,
+
+                $4,
+
+                $5,
+
+                $6
+
+            )
+            `,
+
+            [
+
+                userId,
+
+                -coins,
+
+                currentBalance,
+
+                newBalance,
+
+                withdrawal.id,
+
+                `FaucetPay withdrawal request: ${coins} coins`
+
+            ]
+
+        );
+
+
+        /* =================================================
+           COMMIT
+        ================================================= */
+
+        await client.query(
+            "COMMIT"
+        );
+
+
+        /* =================================================
+           RETURN
+        ================================================= */
+
+        return {
+
+            ...formatWithdrawal(
+                withdrawal,
+                false
+            ),
+
+            newBalance
+
+        };
+
+
+    } catch (error) {
+
+        /* =================================================
+           ROLLBACK
+        ================================================= */
+
+        try {
+
+            await client.query(
+                "ROLLBACK"
+            );
+
+        } catch (
+            rollbackError
+        ) {
+
+            console.error(
+                "Withdrawal rollback error:",
+                rollbackError
+            );
+
+        }
+
+
+        throw error;
+
+
+    } finally {
+
+        client.release();
+
+    }
+
 }
 
 
@@ -635,144 +887,323 @@ export async function createWithdrawal(
 ========================================================= */
 
 export async function getUserWithdrawals(
-  userId,
-  limit = 20,
-  offset = 0
+
+    userId,
+
+    limit = 20,
+
+    offset = 0
+
 ) {
 
-  limit = Math.min(
-    Math.max(
-      Number(limit) || 20,
-      1
-    ),
-    100
-  );
+    if (
+        !validateUserId(userId)
+    ) {
 
-  offset = Math.max(
-    Number(offset) || 0,
-    0
-  );
+        const error =
+            new Error(
+                "Authentication required."
+            );
+
+        error.code =
+            "AUTHENTICATION_REQUIRED";
+
+        error.statusCode =
+            401;
+
+        throw error;
+
+    }
 
 
-  const result =
-    await pool.query(
-      `
-      SELECT
-        id,
-        provider,
-        amount_coins,
-        amount_usd,
-        faucetpay_email,
-        aba_account_number,
-        aba_account_name,
-        status,
-        provider_transaction_id,
-        failure_reason,
-        requested_at,
-        processed_at,
-        updated_at
-      FROM withdrawals
-      WHERE user_id = $1
-      ORDER BY requested_at DESC
-      LIMIT $2
-      OFFSET $3
-      `,
-      [
-        userId,
-        limit,
-        offset
-      ]
+    let safeLimit =
+        Number.parseInt(
+            limit,
+            10
+        );
+
+
+    if (
+        !Number.isInteger(
+            safeLimit
+        )
+    ) {
+
+        safeLimit = 20;
+
+    }
+
+
+    safeLimit =
+        Math.min(
+            Math.max(
+                safeLimit,
+                1
+            ),
+            100
+        );
+
+
+    let safeOffset =
+        Number.parseInt(
+            offset,
+            10
+        );
+
+
+    if (
+        !Number.isInteger(
+            safeOffset
+        ) ||
+        safeOffset < 0
+    ) {
+
+        safeOffset = 0;
+
+    }
+
+
+    const result =
+        await pool.query(
+
+            `
+            SELECT
+
+                id,
+
+                provider,
+
+                amount_coins,
+
+                amount_usd,
+
+                faucetpay_email,
+
+                status,
+
+                provider_transaction_id,
+
+                failure_reason,
+
+                requested_at,
+
+                processed_at,
+
+                updated_at
+
+            FROM withdrawals
+
+            WHERE user_id = $1
+
+            ORDER BY requested_at DESC
+
+            LIMIT $2
+
+            OFFSET $3
+            `,
+
+            [
+                userId,
+                safeLimit,
+                safeOffset
+            ]
+
+        );
+
+
+    return result.rows.map(
+        row =>
+            formatWithdrawal(
+                row,
+                false
+            )
     );
 
-
-  return result.rows.map(
-    (row) =>
-      formatWithdrawal(
-        row,
-        false
-      )
-  );
 }
 
 
 /* =========================================================
    GET SINGLE WITHDRAWAL
-========================================================= */
+=========================================================
+
+IMPORTANT:
+
+The route calls:
+
+getWithdrawal(
+    withdrawalId,
+    userId
+)
+
+So this function follows that exact order.
+
+=========================================================
+*/
 
 export async function getWithdrawal(
-  userId,
-  withdrawalId
+
+    withdrawalId,
+
+    userId
+
 ) {
 
-  if (
-    typeof withdrawalId !==
-      "string" ||
-    !withdrawalId.trim()
-  ) {
-    throw new Error(
-      "WITHDRAWAL_NOT_FOUND"
+    if (
+        !validateUserId(
+            userId
+        )
+    ) {
+
+        const error =
+            new Error(
+                "Authentication required."
+            );
+
+        error.code =
+            "AUTHENTICATION_REQUIRED";
+
+        error.statusCode =
+            401;
+
+        throw error;
+
+    }
+
+
+    const id =
+        String(
+            withdrawalId || ""
+        ).trim();
+
+
+    if (!id) {
+
+        const error =
+            new Error(
+                "Withdrawal not found."
+            );
+
+        error.code =
+            "WITHDRAWAL_NOT_FOUND";
+
+        error.statusCode =
+            404;
+
+        throw error;
+
+    }
+
+
+    const result =
+        await pool.query(
+
+            `
+            SELECT
+
+                id,
+
+                provider,
+
+                amount_coins,
+
+                amount_usd,
+
+                faucetpay_email,
+
+                status,
+
+                provider_transaction_id,
+
+                failure_reason,
+
+                requested_at,
+
+                processed_at,
+
+                updated_at
+
+            FROM withdrawals
+
+            WHERE id = $1
+
+              AND user_id = $2
+
+            LIMIT 1
+            `,
+
+            [
+                id,
+                userId
+            ]
+
+        );
+
+
+    if (
+        result.rowCount === 0
+    ) {
+
+        const error =
+            new Error(
+                "Withdrawal not found."
+            );
+
+        error.code =
+            "WITHDRAWAL_NOT_FOUND";
+
+        error.statusCode =
+            404;
+
+        throw error;
+
+    }
+
+
+    return formatWithdrawal(
+
+        result.rows[0],
+
+        false
+
     );
-  }
 
-
-  const result =
-    await pool.query(
-      `
-      SELECT
-        id,
-        provider,
-        amount_coins,
-        amount_usd,
-        faucetpay_email,
-        aba_account_number,
-        aba_account_name,
-        status,
-        provider_transaction_id,
-        failure_reason,
-        requested_at,
-        processed_at,
-        updated_at
-      FROM withdrawals
-      WHERE id = $1
-        AND user_id = $2
-      LIMIT 1
-      `,
-      [
-        withdrawalId.trim(),
-        userId
-      ]
-    );
-
-
-  if (
-    result.rowCount === 0
-  ) {
-    throw new Error(
-      "WITHDRAWAL_NOT_FOUND"
-    );
-  }
-
-
-  return formatWithdrawal(
-    result.rows[0],
-    false
-  );
 }
 
 
 /* =========================================================
-   WITHDRAWAL CONFIG
+   CONFIG
 ========================================================= */
 
 export const WITHDRAWAL_CONFIG = {
-  coinsPerUsd:
-    COINS_PER_USD,
 
-  minimumCoins:
-    MINIMUM_WITHDRAWAL,
+    COINS_PER_USD:
+        COINS_PER_USD,
 
-  providers: [
-    PROVIDERS.FAUCETPAY,
-    PROVIDERS.ABA
-  ]
+    MIN_COINS:
+        MINIMUM_WITHDRAWAL,
+
+    PROVIDER:
+        PROVIDER,
+
+    PROVIDERS: [
+        PROVIDER
+    ]
+
+};
+
+
+/* =========================================================
+   DEFAULT EXPORT
+========================================================= */
+
+export default {
+
+    createWithdrawal,
+
+    getUserWithdrawals,
+
+    getWithdrawal,
+
+    WITHDRAWAL_CONFIG
+
 };
