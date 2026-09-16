@@ -1516,12 +1516,74 @@ export async function getRewardStatus(
             );
 
 
+        /* -------------------------------------------------
+           FRONTEND-COMPATIBLE REWARD STATUS
+
+           The Mini App needs the authoritative wallet balance,
+           daily-claim state, life recovery timestamp, and a
+           quick indication that AdsGram has confirmed an ad.
+
+           These values are derived from PostgreSQL only; the
+           client cannot supply or modify them.
+        ------------------------------------------------- */
+
+        const verifiedAds = {
+            life: 0,
+            double_reward: 0
+        };
+
+        for (const reward of rewards.rows) {
+            if (
+                reward.status === "confirmed" &&
+                reward.consumed_at == null &&
+                Object.prototype.hasOwnProperty.call(
+                    verifiedAds,
+                    reward.ad_type
+                )
+            ) {
+                verifiedAds[reward.ad_type] += 1;
+            }
+        }
+
+        const today =
+            new Date()
+                .toISOString()
+                .slice(0, 10);
+
+        const dailyClaimed =
+            Boolean(
+                user.last_daily_claim &&
+                String(user.last_daily_claim).slice(0, 10) === today
+            );
+
         return {
+            balance:
+                Number(user.coins || 0),
+
+            coins:
+                Number(user.coins || 0),
+
             lives:
                 Number(user.lives),
 
             maxLives:
                 MAX_LIVES,
+
+            lastLifeAt:
+                user.last_life_at || null,
+
+            last_life_at:
+                user.last_life_at || null,
+
+            dailyClaimed,
+
+            daily_claimed:
+                dailyClaimed,
+
+            verifiedAds,
+
+            verified_ads:
+                verifiedAds,
 
             pendingAds:
                 rewards.rows
