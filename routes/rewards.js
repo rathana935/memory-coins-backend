@@ -12,11 +12,13 @@ import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
+
 /* =========================================================
    AUTHENTICATION
 ========================================================= */
 
 router.use(requireAuth);
+
 
 /* =========================================================
    UUID VALIDATION
@@ -31,15 +33,33 @@ function isValidUUID(value) {
     );
 }
 
+
+/* =========================================================
+   USER ID HELPER
+========================================================= */
+
+function getUserId(req) {
+    return (
+        req.user?.id ||
+        req.user?.user_id ||
+        null
+    );
+}
+
+
 /* =========================================================
    ERROR HELPER
 ========================================================= */
 
 function handleError(res, error) {
 
-    console.error("Rewards API error:", error);
+    console.error(
+        "Rewards API error:",
+        error
+    );
 
     const statusMap = {
+
         USER_NOT_FOUND: 404,
 
         INVALID_USER_ID: 400,
@@ -72,9 +92,18 @@ function handleError(res, error) {
 
         AD_ALREADY_CONSUMED: 409,
 
+        COIN_BALANCE_OVERFLOW: 409,
+
+        USER_UPDATE_FAILED: 500,
+
         INVALID_GAME_ID: 400,
 
-        INVALID_GAME_LEVEL: 400
+        INVALID_GAME_LEVEL: 400,
+
+        INVALID_GAME_DIFFICULTY: 400,
+
+        INVALID_STORED_AD_TYPE: 500
+
     };
 
     const status =
@@ -83,6 +112,7 @@ function handleError(res, error) {
     return res
         .status(status)
         .json({
+
             success: false,
 
             code:
@@ -92,8 +122,10 @@ function handleError(res, error) {
             message:
                 error.message ||
                 "Something went wrong."
+
         });
 }
+
 
 /* =========================================================
    CREATE ADSGRAM AD INTENT
@@ -114,6 +146,8 @@ Double reward:
     "gameSessionId": "UUID"
 }
 
+The client NEVER supplies the reward amount.
+
 ========================================================= */
 
 router.post(
@@ -122,15 +156,36 @@ router.post(
 
         try {
 
+            const userId =
+                getUserId(req);
+
+            if (!userId) {
+
+                return res
+                    .status(401)
+                    .json({
+                        success: false,
+                        code:
+                            "AUTH_REQUIRED",
+                        message:
+                            "Authentication required."
+                    });
+            }
+
+
             const adType =
-                typeof req.body?.adType === "string"
+                typeof req.body?.adType ===
+                "string"
                     ? req.body.adType.trim()
                     : "";
 
+
             const gameSessionId =
-                typeof req.body?.gameSessionId === "string"
+                typeof req.body?.gameSessionId ===
+                "string"
                     ? req.body.gameSessionId.trim()
                     : null;
+
 
             /* -----------------------------------------
                VALIDATE AD TYPE
@@ -144,31 +199,45 @@ router.post(
                 return res
                     .status(400)
                     .json({
+
                         success: false,
-                        code: "INVALID_AD_TYPE",
+
+                        code:
+                            "INVALID_AD_TYPE",
+
                         message:
                             "Invalid ad type."
+
                     });
             }
+
 
             /* -----------------------------------------
                DOUBLE REWARD REQUIRES GAME SESSION
             ----------------------------------------- */
 
-            if (adType === "double_reward") {
+            if (
+                adType ===
+                "double_reward"
+            ) {
 
                 if (!gameSessionId) {
 
                     return res
                         .status(400)
                         .json({
+
                             success: false,
+
                             code:
                                 "GAME_SESSION_REQUIRED",
+
                             message:
                                 "Game session ID is required."
+
                         });
                 }
+
 
                 if (
                     !isValidUUID(
@@ -179,14 +248,30 @@ router.post(
                     return res
                         .status(400)
                         .json({
+
                             success: false,
+
                             code:
                                 "INVALID_GAME_SESSION",
+
                             message:
                                 "Invalid game session ID."
+
                         });
                 }
             }
+
+
+            /* -----------------------------------------
+               LIFE DOES NOT ACCEPT A GAME SESSION
+            ----------------------------------------- */
+
+            const normalizedGameSessionId =
+                adType ===
+                "double_reward"
+                    ? gameSessionId
+                    : null;
+
 
             /* -----------------------------------------
                CREATE SERVER-SIDE INTENT
@@ -194,17 +279,16 @@ router.post(
 
             const result =
                 await createAdRewardIntent({
-                    userId:
-                        req.user.user_id,
+
+                    userId,
 
                     adType,
 
                     gameSessionId:
-                        adType ===
-                        "double_reward"
-                            ? gameSessionId
-                            : null
+                        normalizedGameSessionId
+
                 });
+
 
             return res.json({
 
@@ -224,7 +308,12 @@ router.post(
                     gameSessionId:
                         result.metadata
                             ?.gameSessionId ||
-                        null
+                        null,
+
+                    blockId:
+                        result.blockId ||
+                        undefined
+
                 }
 
             });
@@ -239,16 +328,16 @@ router.post(
     }
 );
 
+
 /* =========================================================
    CLAIM +1 LIFE
 =========================================================
 
 POST /api/rewards/life
 
-This consumes a CONFIRMED AdsGram life reward.
+The AdsGram Reward URL confirms the ad first.
 
-The AdsGram callback itself should only confirm the
-reward. This endpoint performs the actual life claim.
+This endpoint then consumes that confirmed reward.
 
 ========================================================= */
 
@@ -258,10 +347,32 @@ router.post(
 
         try {
 
+            const userId =
+                getUserId(req);
+
+            if (!userId) {
+
+                return res
+                    .status(401)
+                    .json({
+
+                        success: false,
+
+                        code:
+                            "AUTH_REQUIRED",
+
+                        message:
+                            "Authentication required."
+
+                    });
+            }
+
+
             const result =
                 await claimAdLife(
-                    req.user.user_id
+                    userId
                 );
+
 
             return res.json(
                 result
@@ -276,6 +387,7 @@ router.post(
         }
     }
 );
+
 
 /* =========================================================
    DAILY BONUS
@@ -291,10 +403,32 @@ router.post(
 
         try {
 
+            const userId =
+                getUserId(req);
+
+            if (!userId) {
+
+                return res
+                    .status(401)
+                    .json({
+
+                        success: false,
+
+                        code:
+                            "AUTH_REQUIRED",
+
+                        message:
+                            "Authentication required."
+
+                    });
+            }
+
+
             const result =
                 await claimDailyBonus(
-                    req.user.user_id
+                    userId
                 );
+
 
             return res.json(
                 result
@@ -309,6 +443,7 @@ router.post(
         }
     }
 );
+
 
 /* =========================================================
    DOUBLE GAME REWARD
@@ -324,11 +459,12 @@ Body:
 
 The server verifies:
 
-1. The game belongs to the user.
-2. The game is completed.
-3. An AdsGram double_reward was confirmed.
-4. That reward belongs to this exact game.
-5. The double reward has not already been consumed.
+1. Game belongs to the authenticated user.
+2. Game is completed.
+3. AdsGram reward is confirmed.
+4. Reward belongs to this exact game.
+5. Reward has not already been consumed.
+6. Original server-side game reward is used.
 
 ========================================================= */
 
@@ -338,23 +474,51 @@ router.post(
 
         try {
 
+            const userId =
+                getUserId(req);
+
+            if (!userId) {
+
+                return res
+                    .status(401)
+                    .json({
+
+                        success: false,
+
+                        code:
+                            "AUTH_REQUIRED",
+
+                        message:
+                            "Authentication required."
+
+                    });
+            }
+
+
             const gameSessionId =
-                typeof req.body?.gameSessionId === "string"
+                typeof req.body?.gameSessionId ===
+                "string"
                     ? req.body.gameSessionId.trim()
                     : "";
+
 
             if (!gameSessionId) {
 
                 return res
                     .status(400)
                     .json({
+
                         success: false,
+
                         code:
                             "GAME_SESSION_REQUIRED",
+
                         message:
                             "Game session ID is required."
+
                     });
             }
+
 
             if (
                 !isValidUUID(
@@ -365,19 +529,25 @@ router.post(
                 return res
                     .status(400)
                     .json({
+
                         success: false,
+
                         code:
                             "INVALID_GAME_SESSION",
+
                         message:
                             "Invalid game session ID."
+
                     });
             }
 
+
             const result =
                 await claimDoubleGameReward(
-                    req.user.user_id,
+                    userId,
                     gameSessionId
                 );
+
 
             return res.json(
                 result
@@ -393,6 +563,7 @@ router.post(
     }
 );
 
+
 /* =========================================================
    REWARD STATUS
 =========================================================
@@ -407,16 +578,39 @@ router.get(
 
         try {
 
+            const userId =
+                getUserId(req);
+
+            if (!userId) {
+
+                return res
+                    .status(401)
+                    .json({
+
+                        success: false,
+
+                        code:
+                            "AUTH_REQUIRED",
+
+                        message:
+                            "Authentication required."
+
+                    });
+            }
+
+
             const result =
                 await getRewardStatus(
-                    req.user.user_id
+                    userId
                 );
+
 
             return res.json({
 
                 success: true,
 
                 ...result
+
             });
 
         } catch (error) {
@@ -428,6 +622,7 @@ router.get(
         }
     }
 );
+
 
 /* =========================================================
    EXPORT
