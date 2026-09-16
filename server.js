@@ -5,7 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
-import { pool } from "./db/pool.js";
+import pool from "./db/pool.js";
 
 import authRouter from "./routes/auth.js";
 import gameRouter from "./routes/game.js";
@@ -464,8 +464,6 @@ app.get(
    AUTHENTICATION ROUTES
 =========================================================
 
-   IMPORTANT:
-
    /api/auth/telegram
 
    remains PUBLIC because the user does not have a
@@ -489,21 +487,6 @@ app.use(
 
 /* =========================================================
    PROTECTED GAME ROUTES
-=========================================================
-
-   EVERY request to:
-
-       /api/game/*
-
-   now requires:
-
-       Authorization: Bearer <sessionToken>
-
-   The middleware validates the session and creates:
-
-       req.user.id
-       req.user.user_id
-
 ========================================================= */
 
 app.use(
@@ -523,9 +506,6 @@ app.use(
 
    We intentionally do NOT add requireAuth here again.
 
-   This prevents running the database authentication
-   query twice for every rewards request.
-
 ========================================================= */
 
 app.use(
@@ -536,10 +516,6 @@ app.use(
 
 /* =========================================================
    PROTECTED LEADERBOARD ROUTES
-=========================================================
-
-   Leaderboard requests can now access req.user safely.
-
 ========================================================= */
 
 app.use(
@@ -553,11 +529,6 @@ app.use(
 
 /* =========================================================
    PROTECTED REFERRAL ROUTES
-=========================================================
-
-   Referral endpoints use the authenticated user's
-   database identity.
-
 ========================================================= */
 
 app.use(
@@ -571,14 +542,6 @@ app.use(
 
 /* =========================================================
    PROTECTED WITHDRAWAL ROUTES
-=========================================================
-
-   Withdrawal requests MUST always be associated with
-   the authenticated backend user.
-
-   The client must never be trusted to provide another
-   user's database ID.
-
 ========================================================= */
 
 app.use(
