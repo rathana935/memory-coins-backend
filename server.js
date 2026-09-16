@@ -14,6 +14,8 @@ import leaderboardRouter from "./routes/leaderboard.js";
 import referralsRouter from "./routes/referrals.js";
 import withdrawalsRouter from "./routes/withdrawals.js";
 
+import { requireAuth } from "./middleware/auth.js";
+
 import {
     confirmAdsgramReward
 } from "./services/rewards.js";
@@ -62,7 +64,6 @@ app.use(
     })
 );
 
-
 app.use(
     cors({
         origin: true,
@@ -71,12 +72,15 @@ app.use(
 );
 
 
+/* =========================================================
+   BODY PARSING
+========================================================= */
+
 app.use(
     express.json({
         limit: "100kb"
     })
 );
-
 
 app.use(
     express.urlencoded({
@@ -94,8 +98,10 @@ const generalLimiter =
     rateLimit({
         windowMs: 60 * 1000,
         max: 120,
+
         standardHeaders: true,
         legacyHeaders: false,
+
         message: {
             success: false,
             message:
@@ -108,8 +114,10 @@ const authLimiter =
     rateLimit({
         windowMs: 15 * 60 * 1000,
         max: 30,
+
         standardHeaders: true,
         legacyHeaders: false,
+
         message: {
             success: false,
             message:
@@ -122,8 +130,10 @@ const adsgramLimiter =
     rateLimit({
         windowMs: 60 * 1000,
         max: 60,
+
         standardHeaders: true,
         legacyHeaders: false,
+
         message: {
             success: false,
             message:
@@ -138,7 +148,7 @@ app.use(
 
 
 /* =========================================================
-   BASIC ROUTES
+   BASIC ROOT ROUTE
 ========================================================= */
 
 app.get(
@@ -160,6 +170,9 @@ app.get(
 
             adsgramBlockId:
                 ADSGRAM_BLOCK_ID,
+
+            authentication:
+                "Telegram WebApp + Bearer session",
 
             endpoints: {
 
@@ -196,7 +209,7 @@ app.get(
 
 
 /* =========================================================
-   HEALTH
+   HEALTH CHECK
 ========================================================= */
 
 app.get(
@@ -222,11 +235,12 @@ app.get(
                 environment:
                     NODE_ENV,
 
-                adsgram:
-                    {
-                        blockId:
-                            ADSGRAM_BLOCK_ID
-                    },
+                adsgram: {
+
+                    blockId:
+                        ADSGRAM_BLOCK_ID
+
+                },
 
                 timestamp:
                     new Date().toISOString()
@@ -265,28 +279,37 @@ app.get(
 
 
 /* =========================================================
-   ADSGRAM REWARD URL
+   ADSGRAM REWARD CALLBACK
 =========================================================
 
    AdsGram calls:
 
    GET
-
-   /api/adsgram/reward?userid=[userId]
+   /api/adsgram/reward?userid=[telegramUserId]
 
    IMPORTANT:
 
-   Do NOT trust ad_type from the URL.
+   This endpoint MUST remain public because AdsGram
+   does not have the user's Bearer session token.
 
-   The backend finds the user's latest pending
-   AdsGram intent and determines the ad type
-   from PostgreSQL.
+   Security is handled by the backend's pending
+   ad-intent system.
+
+   The server does NOT trust:
+
+       ad_type
+       reward amount
+       coins
+       balance
+
+   from the client.
 
 ========================================================= */
 
 app.get(
     "/api/adsgram/reward",
     adsgramLimiter,
+
     async (req, res) => {
 
         try {
@@ -438,7 +461,23 @@ app.get(
 
 
 /* =========================================================
-   API ROUTES
+   AUTHENTICATION ROUTES
+=========================================================
+
+   IMPORTANT:
+
+   /api/auth/telegram
+
+   remains PUBLIC because the user does not have a
+   backend session yet.
+
+   Telegram initData is verified inside authRouter.
+
+   /api/auth/me
+   /api/auth/logout
+
+   already use requireAuth inside authRouter.
+
 ========================================================= */
 
 app.use(
@@ -448,11 +487,46 @@ app.use(
 );
 
 
+/* =========================================================
+   PROTECTED GAME ROUTES
+=========================================================
+
+   EVERY request to:
+
+       /api/game/*
+
+   now requires:
+
+       Authorization: Bearer <sessionToken>
+
+   The middleware validates the session and creates:
+
+       req.user.id
+       req.user.user_id
+
+========================================================= */
+
 app.use(
     "/api/game",
+
+    requireAuth,
+
     gameRouter
 );
 
+
+/* =========================================================
+   PROTECTED REWARD ROUTES
+=========================================================
+
+   rewardsRouter already uses requireAuth internally.
+
+   We intentionally do NOT add requireAuth here again.
+
+   This prevents running the database authentication
+   query twice for every rewards request.
+
+========================================================= */
 
 app.use(
     "/api/rewards",
@@ -460,26 +534,64 @@ app.use(
 );
 
 
+/* =========================================================
+   PROTECTED LEADERBOARD ROUTES
+=========================================================
+
+   Leaderboard requests can now access req.user safely.
+
+========================================================= */
+
 app.use(
     "/api/leaderboard",
+
+    requireAuth,
+
     leaderboardRouter
 );
 
 
+/* =========================================================
+   PROTECTED REFERRAL ROUTES
+=========================================================
+
+   Referral endpoints use the authenticated user's
+   database identity.
+
+========================================================= */
+
 app.use(
     "/api/referrals",
+
+    requireAuth,
+
     referralsRouter
 );
 
 
+/* =========================================================
+   PROTECTED WITHDRAWAL ROUTES
+=========================================================
+
+   Withdrawal requests MUST always be associated with
+   the authenticated backend user.
+
+   The client must never be trusted to provide another
+   user's database ID.
+
+========================================================= */
+
 app.use(
     "/api/withdrawals",
+
+    requireAuth,
+
     withdrawalsRouter
 );
 
 
 /* =========================================================
-   404
+   404 HANDLER
 ========================================================= */
 
 app.use(
@@ -499,11 +611,16 @@ app.use(
 
 
 /* =========================================================
-   ERROR HANDLER
+   GLOBAL ERROR HANDLER
 ========================================================= */
 
 app.use(
-    (error, req, res, next) => {
+    (
+        error,
+        req,
+        res,
+        next
+    ) => {
 
         console.error(
             "Unhandled server error:",
@@ -520,9 +637,11 @@ app.use(
         }
 
 
-        res.status(
-            Number(error.status) || 500
-        ).json({
+        const status =
+            Number(error.status) || 500;
+
+
+        res.status(status).json({
 
             success: false,
 
@@ -533,7 +652,10 @@ app.use(
                             ? error.message
                             : "Internal server error."
                     )
-                    : error.message
+                    : (
+                        error.message ||
+                        "Internal server error."
+                    )
 
         });
 
@@ -571,6 +693,38 @@ const server =
             );
 
             console.log(
+                "Authentication: ENABLED"
+            );
+
+            console.log(
+                "Protected routes: ENABLED"
+            );
+
+            console.log(
+                "Game API: AUTH REQUIRED"
+            );
+
+            console.log(
+                "Leaderboard API: AUTH REQUIRED"
+            );
+
+            console.log(
+                "Referral API: AUTH REQUIRED"
+            );
+
+            console.log(
+                "Withdrawal API: AUTH REQUIRED"
+            );
+
+            console.log(
+                "Rewards API: AUTH REQUIRED"
+            );
+
+            console.log(
+                "AdsGram callback: PUBLIC"
+            );
+
+            console.log(
                 "Server started successfully."
             );
 
@@ -584,6 +738,7 @@ const server =
 
             console.log(
                 "=========================================="
+
             );
 
         }
@@ -647,11 +802,14 @@ async function shutdown(
 }
 
 
+/* =========================================================
+   PROCESS SIGNALS
+========================================================= */
+
 process.on(
     "SIGTERM",
     () => shutdown("SIGTERM")
 );
-
 
 process.on(
     "SIGINT",
