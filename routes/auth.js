@@ -11,6 +11,7 @@ import {
     requireAuth
 } from "../middleware/auth.js";
 
+
 const router = express.Router();
 
 
@@ -19,6 +20,8 @@ const router = express.Router();
 ========================================================= */
 
 const DEFAULT_REFERRAL_REWARD = 250;
+
+const DEFAULT_SESSION_DAYS = 30;
 
 
 /* =========================================================
@@ -45,17 +48,24 @@ function hashToken(token) {
 
 
 /* =========================================================
-   REFERRAL HELPERS
+   SAFE NUMBER
 ========================================================= */
 
-/*
-Expected Telegram referral parameter:
+function safeNumber(value, fallback = 0) {
 
-ref_123456789
+    const number =
+        Number(value);
 
-where 123456789 is the referrer's
-Telegram ID.
-*/
+    return Number.isFinite(number)
+        ? number
+        : fallback;
+
+}
+
+
+/* =========================================================
+   REFERRAL HELPERS
+========================================================= */
 
 function getReferralCode(telegram) {
 
@@ -75,8 +85,11 @@ function getReferrerTelegramId(
     if (
         typeof referralCode !== "string"
     ) {
+
         return null;
+
     }
+
 
     const code =
         referralCode.trim();
@@ -85,7 +98,9 @@ function getReferrerTelegramId(
     if (
         !code.startsWith("ref_")
     ) {
+
         return null;
+
     }
 
 
@@ -96,7 +111,9 @@ function getReferrerTelegramId(
     if (
         !/^\d+$/.test(telegramId)
     ) {
+
         return null;
+
     }
 
 
@@ -106,7 +123,7 @@ function getReferrerTelegramId(
 
 
 /* =========================================================
-   GET REFERRAL REWARD
+   REFERRAL REWARD
 ========================================================= */
 
 async function getReferralReward(
@@ -168,11 +185,347 @@ async function getReferralReward(
 
 
 /* =========================================================
+   NORMALIZE USER
+=========================================================
+
+   IMPORTANT
+
+   The database uses snake_case.
+
+   The frontend uses camelCase.
+
+   We return BOTH.
+
+   Example:
+
+   todayCoins
+   today_coins
+
+   gamesPlayed
+   games_played
+
+========================================================= */
+
+function serializeUser(user) {
+
+    if (!user) {
+
+        return null;
+
+    }
+
+
+    const id =
+        user.id ??
+        user.user_id ??
+        null;
+
+
+    const telegramId =
+        user.telegram_id ??
+        user.telegramId ??
+        null;
+
+
+    const username =
+        user.username ??
+        null;
+
+
+    const firstName =
+        user.first_name ??
+        user.firstName ??
+        null;
+
+
+    const lastName =
+        user.last_name ??
+        user.lastName ??
+        null;
+
+
+    const photoUrl =
+        user.photo_url ??
+        user.photoUrl ??
+        null;
+
+
+    const languageCode =
+        user.language_code ??
+        user.languageCode ??
+        null;
+
+
+    const isPremium =
+        Boolean(
+            user.is_premium ??
+            user.isPremium ??
+            false
+        );
+
+
+    const coins =
+        safeNumber(
+            user.coins
+        );
+
+
+    const todayCoins =
+        safeNumber(
+            user.today_coins ??
+            user.todayCoins
+        );
+
+
+    const gamesPlayed =
+        safeNumber(
+            user.games_played ??
+            user.gamesPlayed
+        );
+
+
+    const easyGames =
+        safeNumber(
+            user.easy_games ??
+            user.easyGames
+        );
+
+
+    const mediumGames =
+        safeNumber(
+            user.medium_games ??
+            user.mediumGames
+        );
+
+
+    const hardGames =
+        safeNumber(
+            user.hard_games ??
+            user.hardGames
+        );
+
+
+    const easyLevel =
+        safeNumber(
+            user.easy_level ??
+            user.easyLevel
+        );
+
+
+    const mediumLevel =
+        safeNumber(
+            user.medium_level ??
+            user.mediumLevel
+        );
+
+
+    const hardLevel =
+        safeNumber(
+            user.hard_level ??
+            user.hardLevel
+        );
+
+
+    const lives =
+        safeNumber(
+            user.lives,
+            5
+        );
+
+
+    const dailyStreak =
+        safeNumber(
+            user.daily_streak ??
+            user.dailyStreak
+        );
+
+
+    const lastDailyClaim =
+        user.last_daily_claim ??
+        user.lastDailyClaim ??
+        null;
+
+
+    const createdAt =
+        user.created_at ??
+        user.createdAt ??
+        null;
+
+
+    return {
+
+        /*
+        =====================================================
+        CANONICAL CAMELCASE API
+        =====================================================
+        */
+
+        id,
+
+        telegramId,
+
+        username,
+
+        firstName,
+
+        lastName,
+
+        photoUrl,
+
+        languageCode,
+
+        isPremium,
+
+        coins,
+
+        todayCoins,
+
+        gamesPlayed,
+
+        easyGames,
+
+        mediumGames,
+
+        hardGames,
+
+        easyLevel,
+
+        mediumLevel,
+
+        hardLevel,
+
+        lives,
+
+        dailyStreak,
+
+        lastDailyClaim,
+
+        createdAt,
+
+
+        /*
+        =====================================================
+        SNAKE_CASE COMPATIBILITY
+        =====================================================
+        */
+
+        user_id:
+            id,
+
+        telegram_id:
+            telegramId,
+
+        first_name:
+            firstName,
+
+        last_name:
+            lastName,
+
+        photo_url:
+            photoUrl,
+
+        language_code:
+            languageCode,
+
+        is_premium:
+            isPremium,
+
+        today_coins:
+            todayCoins,
+
+        games_played:
+            gamesPlayed,
+
+        easy_games:
+            easyGames,
+
+        medium_games:
+            mediumGames,
+
+        hard_games:
+            hardGames,
+
+        easy_level:
+            easyLevel,
+
+        medium_level:
+            mediumLevel,
+
+        hard_level:
+            hardLevel,
+
+        daily_streak:
+            dailyStreak,
+
+        last_daily_claim:
+            lastDailyClaim,
+
+        created_at:
+            createdAt
+
+    };
+
+}
+
+
+/* =========================================================
+   USER SELECT
+========================================================= */
+
+const USER_SELECT = `
+
+    id,
+
+    telegram_id,
+
+    username,
+
+    first_name,
+
+    last_name,
+
+    photo_url,
+
+    language_code,
+
+    is_premium,
+
+    coins,
+
+    today_coins,
+
+    games_played,
+
+    easy_games,
+
+    medium_games,
+
+    hard_games,
+
+    easy_level,
+
+    medium_level,
+
+    hard_level,
+
+    lives,
+
+    daily_streak,
+
+    last_daily_claim,
+
+    created_at
+
+`;
+
+
+/* =========================================================
    POST /api/auth/telegram
 ========================================================= */
 
 router.post(
     "/telegram",
+
     async (req, res) => {
 
         const client =
@@ -181,12 +534,19 @@ router.post(
 
         try {
 
+            /* =================================================
+               READ INIT DATA
+            ================================================= */
+
             const {
                 initData
             } = req.body || {};
 
 
-            if (!initData) {
+            if (
+                typeof initData !== "string" ||
+                !initData.trim()
+            ) {
 
                 return res.status(400).json({
 
@@ -201,7 +561,7 @@ router.post(
 
 
             /* =================================================
-               VERIFY TELEGRAM DATA
+               VERIFY TELEGRAM INIT DATA
             ================================================= */
 
             const telegram =
@@ -211,7 +571,7 @@ router.post(
 
 
             const tgUser =
-                telegram.user;
+                telegram?.user;
 
 
             if (
@@ -231,8 +591,14 @@ router.post(
             }
 
 
+            const telegramId =
+                String(
+                    tgUser.id
+                );
+
+
             /* =================================================
-               GET REFERRAL PARAMETER
+               REFERRAL
             ================================================= */
 
             const referralCode =
@@ -271,7 +637,7 @@ router.post(
                     FOR UPDATE
                     `,
                     [
-                        String(tgUser.id)
+                        telegramId
                     ]
                 );
 
@@ -300,6 +666,7 @@ router.post(
                         is_premium,
                         last_seen_at
                     )
+
                     VALUES
                     (
                         $1,
@@ -312,7 +679,9 @@ router.post(
                         NOW()
                     )
 
-                    ON CONFLICT (telegram_id)
+                    ON CONFLICT (
+                        telegram_id
+                    )
 
                     DO UPDATE SET
 
@@ -338,30 +707,13 @@ router.post(
                             NOW()
 
                     RETURNING
-                        id,
-                        telegram_id,
-                        username,
-                        first_name,
-                        last_name,
-                        photo_url,
-                        language_code,
-                        is_premium,
-                        coins,
-                        today_coins,
-                        games_played,
-                        easy_games,
-                        medium_games,
-                        hard_games,
-                        easy_level,
-                        medium_level,
-                        hard_level,
-                        lives,
-                        daily_streak,
-                        last_daily_claim,
-                        created_at
+
+                        ${USER_SELECT}
                     `,
+
                     [
-                        String(tgUser.id),
+
+                        telegramId,
 
                         tgUser.username ||
                             null,
@@ -381,6 +733,7 @@ router.post(
                         Boolean(
                             tgUser.is_premium
                         )
+
                     ]
                 );
 
@@ -391,13 +744,11 @@ router.post(
 
             /* =================================================
                REFERRAL PROCESSING
-
-               ONLY NEW USERS CAN GENERATE
-               A REFERRAL REWARD.
             ================================================= */
 
             let referralCreated =
                 false;
+
 
             let referralReward =
                 0;
@@ -407,12 +758,8 @@ router.post(
                 isNewUser &&
                 referrerTelegramId &&
                 referrerTelegramId !==
-                    String(tgUser.id)
+                    telegramId
             ) {
-
-                /* ---------------------------------------------
-                   GET REFERRAL REWARD
-                --------------------------------------------- */
 
                 const configuredReward =
                     await getReferralReward(
@@ -420,21 +767,28 @@ router.post(
                     );
 
 
-                /* ---------------------------------------------
+                /* =============================================
                    FIND REFERRER
-                --------------------------------------------- */
+                ============================================= */
 
                 const referrerResult =
                     await client.query(
                         `
                         SELECT
+
                             id,
+
                             telegram_id,
+
                             coins
+
                         FROM users
+
                         WHERE telegram_id = $1
+
                         FOR UPDATE
                         `,
+
                         [
                             referrerTelegramId
                         ]
@@ -442,28 +796,30 @@ router.post(
 
 
                 if (
-                    referrerResult
-                        .rows
-                        .length > 0
+                    referrerResult.rows.length >
+                    0
                 ) {
 
                     const referrer =
-                        referrerResult
-                            .rows[0];
+                        referrerResult.rows[0];
 
 
-                    /* -----------------------------------------
-                       CHECK EXISTING REFERRAL
-                    ----------------------------------------- */
+                    /* =========================================
+                       PREVENT DUPLICATE REFERRAL
+                    ========================================= */
 
                     const existingReferralResult =
                         await client.query(
                             `
                             SELECT id
+
                             FROM referrals
+
                             WHERE referred_user_id = $1
+
                             LIMIT 1
                             `,
+
                             [
                                 user.id
                             ]
@@ -477,7 +833,7 @@ router.post(
                     ) {
 
                         const balanceBefore =
-                            Number(
+                            safeNumber(
                                 referrer.coins
                             );
 
@@ -487,9 +843,9 @@ router.post(
                             configuredReward;
 
 
-                        /* -------------------------------------
+                        /* =====================================
                            CREATE REFERRAL
-                        ------------------------------------- */
+                        ===================================== */
 
                         const referralResult =
                             await client.query(
@@ -503,6 +859,7 @@ router.post(
                                     created_at,
                                     completed_at
                                 )
+
                                 VALUES
                                 (
                                     $1,
@@ -512,27 +869,27 @@ router.post(
                                     NOW(),
                                     NOW()
                                 )
+
                                 ON CONFLICT (
                                     referred_user_id
                                 )
+
                                 DO NOTHING
+
                                 RETURNING id
                                 `,
+
                                 [
+
                                     referrer.id,
 
                                     user.id,
 
                                     configuredReward
+
                                 ]
                             );
 
-
-                        /*
-                           Only continue with the reward
-                           if the referral was actually
-                           inserted.
-                        */
 
                         if (
                             referralResult
@@ -546,14 +903,16 @@ router.post(
                                     .id;
 
 
-                            /* ---------------------------------
+                            /* =================================
                                ADD REFERRAL COINS
-                            --------------------------------- */
+                            ================================= */
 
                             await client.query(
                                 `
                                 UPDATE users
+
                                 SET
+
                                     coins =
                                         coins + $1,
 
@@ -562,19 +921,23 @@ router.post(
 
                                     updated_at =
                                         NOW()
+
                                 WHERE id = $2
                                 `,
+
                                 [
+
                                     configuredReward,
 
                                     referrer.id
+
                                 ]
                             );
 
 
-                            /* ---------------------------------
-                               RECORD COIN TRANSACTION
-                            --------------------------------- */
+                            /* =================================
+                               RECORD TRANSACTION
+                            ================================= */
 
                             await client.query(
                                 `
@@ -588,6 +951,7 @@ router.post(
                                     reference_id,
                                     description
                                 )
+
                                 VALUES
                                 (
                                     $1,
@@ -599,7 +963,9 @@ router.post(
                                     $7
                                 )
                                 `,
+
                                 [
+
                                     referrer.id,
 
                                     "referral",
@@ -613,12 +979,14 @@ router.post(
                                     referralId,
 
                                     "Referral reward for inviting a new user."
+
                                 ]
                             );
 
 
                             referralCreated =
                                 true;
+
 
                             referralReward =
                                 configuredReward;
@@ -633,37 +1001,21 @@ router.post(
 
 
             /* =================================================
-               REFRESH NEW USER DATA
+               REFRESH USER
             ================================================= */
 
             const refreshedUserResult =
                 await client.query(
                     `
                     SELECT
-                        id,
-                        telegram_id,
-                        username,
-                        first_name,
-                        last_name,
-                        photo_url,
-                        language_code,
-                        is_premium,
-                        coins,
-                        today_coins,
-                        games_played,
-                        easy_games,
-                        medium_games,
-                        hard_games,
-                        easy_level,
-                        medium_level,
-                        hard_level,
-                        lives,
-                        daily_streak,
-                        last_daily_claim,
-                        created_at
+
+                        ${USER_SELECT}
+
                     FROM users
+
                     WHERE id = $1
                     `,
+
                     [
                         user.id
                     ]
@@ -673,6 +1025,15 @@ router.post(
             const finalUser =
                 refreshedUserResult
                     .rows[0];
+
+
+            if (!finalUser) {
+
+                throw new Error(
+                    "Unable to load authenticated user."
+                );
+
+            }
 
 
             /* =================================================
@@ -689,12 +1050,36 @@ router.post(
                 );
 
 
-            const sessionDays =
+            let sessionDays =
                 Number(
                     process.env.SESSION_DAYS ||
-                    30
+                    DEFAULT_SESSION_DAYS
                 );
 
+
+            if (
+                !Number.isFinite(
+                    sessionDays
+                ) ||
+                sessionDays <= 0
+            ) {
+
+                sessionDays =
+                    DEFAULT_SESSION_DAYS;
+
+            }
+
+
+            sessionDays =
+                Math.min(
+                    sessionDays,
+                    365
+                );
+
+
+            /* =================================================
+               INSERT SESSION
+            ================================================= */
 
             await client.query(
                 `
@@ -706,6 +1091,7 @@ router.post(
                     user_agent,
                     ip_address
                 )
+
                 VALUES
                 (
                     $1,
@@ -716,7 +1102,9 @@ router.post(
                     $5
                 )
                 `,
+
                 [
+
                     finalUser.id,
 
                     tokenHash,
@@ -728,20 +1116,24 @@ router.post(
                     ] || null,
 
                     req.ip || null
+
                 ]
             );
 
 
             /* =================================================
-               REMOVE EXPIRED SESSIONS
+               DELETE EXPIRED SESSIONS
             ================================================= */
 
             await client.query(
                 `
                 DELETE FROM auth_sessions
+
                 WHERE user_id = $1
+
                   AND expires_at < NOW()
                 `,
+
                 [
                     finalUser.id
                 ]
@@ -758,7 +1150,17 @@ router.post(
 
 
             /* =================================================
-               RESPONSE
+               SERIALIZE USER
+            ================================================= */
+
+            const serializedUser =
+                serializeUser(
+                    finalUser
+                );
+
+
+            /* =================================================
+               SUCCESS RESPONSE
             ================================================= */
 
             return res.json({
@@ -768,11 +1170,17 @@ router.post(
                 token:
                     sessionToken,
 
+                accessToken:
+                    sessionToken,
+
                 expiresIn:
                     sessionDays *
                     24 *
                     60 *
                     60,
+
+                tokenType:
+                    "Bearer",
 
                 referral: {
 
@@ -780,76 +1188,24 @@ router.post(
                         referralCreated,
 
                     rewardCoins:
+                        referralReward,
+
+                    reward_coins:
                         referralReward
 
                 },
 
-                user: {
-
-                    id:
-                        finalUser.id,
-
-                    telegramId:
-                        finalUser.telegram_id,
-
-                    username:
-                        finalUser.username,
-
-                    firstName:
-                        finalUser.first_name,
-
-                    lastName:
-                        finalUser.last_name,
-
-                    photoUrl:
-                        finalUser.photo_url,
-
-                    coins:
-                        Number(
-                            finalUser.coins
-                        ),
-
-                    todayCoins:
-                        Number(
-                            finalUser.today_coins
-                        ),
-
-                    gamesPlayed:
-                        finalUser.games_played,
-
-                    easyGames:
-                        finalUser.easy_games,
-
-                    mediumGames:
-                        finalUser.medium_games,
-
-                    hardGames:
-                        finalUser.hard_games,
-
-                    easyLevel:
-                        finalUser.easy_level,
-
-                    mediumLevel:
-                        finalUser.medium_level,
-
-                    hardLevel:
-                        finalUser.hard_level,
-
-                    lives:
-                        finalUser.lives,
-
-                    dailyStreak:
-                        finalUser.daily_streak,
-
-                    lastDailyClaim:
-                        finalUser.last_daily_claim
-
-                }
+                user:
+                    serializedUser
 
             });
 
 
         } catch (error) {
+
+            /* =================================================
+               ROLLBACK
+            ================================================= */
 
             try {
 
@@ -857,8 +1213,15 @@ router.post(
                     "ROLLBACK"
                 );
 
-            } catch {
-                // Ignore rollback errors
+            } catch (
+                rollbackError
+            ) {
+
+                console.error(
+                    "Authentication rollback error:",
+                    rollbackError
+                );
+
             }
 
 
@@ -868,7 +1231,14 @@ router.post(
             );
 
 
-            return res.status(401).json({
+            const statusCode =
+                error.statusCode ||
+                401;
+
+
+            return res.status(
+                statusCode
+            ).json({
 
                 success: false,
 
@@ -895,76 +1265,99 @@ router.post(
 
 router.get(
     "/me",
+
     requireAuth,
+
     async (req, res) => {
 
-        return res.json({
+        try {
 
-            success: true,
+            /*
+            -------------------------------------------------
+            IMPORTANT
+            -------------------------------------------------
 
-            user: {
+            Do not rely only on req.user.
 
-                id:
-                    req.user.user_id,
+            Refresh the user from PostgreSQL so the frontend
+            receives the latest balance/statistics.
+            -------------------------------------------------
+            */
 
-                telegramId:
-                    req.user.telegram_id,
+            const userId =
+                req.user.user_id ||
+                req.user.id;
 
-                username:
-                    req.user.username,
 
-                firstName:
-                    req.user.first_name,
+            const result =
+                await pool.query(
+                    `
+                    SELECT
 
-                lastName:
-                    req.user.last_name,
+                        ${USER_SELECT}
 
-                photoUrl:
-                    req.user.photo_url,
+                    FROM users
 
-                coins:
-                    Number(
-                        req.user.coins
-                    ),
+                    WHERE id = $1
 
-                todayCoins:
-                    Number(
-                        req.user.today_coins
-                    ),
+                    LIMIT 1
+                    `,
 
-                gamesPlayed:
-                    req.user.games_played,
+                    [
+                        userId
+                    ]
+                );
 
-                easyGames:
-                    req.user.easy_games,
 
-                mediumGames:
-                    req.user.medium_games,
+            if (
+                result.rowCount === 0
+            ) {
 
-                hardGames:
-                    req.user.hard_games,
+                return res.status(404).json({
 
-                easyLevel:
-                    req.user.easy_level,
+                    success: false,
 
-                mediumLevel:
-                    req.user.medium_level,
+                    error:
+                        "User not found."
 
-                hardLevel:
-                    req.user.hard_level,
-
-                lives:
-                    req.user.lives,
-
-                dailyStreak:
-                    req.user.daily_streak,
-
-                lastDailyClaim:
-                    req.user.last_daily_claim
+                });
 
             }
 
-        });
+
+            const user =
+                serializeUser(
+                    result.rows[0]
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                user
+
+            });
+
+
+        } catch (error) {
+
+            console.error(
+                "Auth /me error:",
+                error
+            );
+
+
+            return res.status(500).json({
+
+                success: false,
+
+                error:
+                    "Unable to load user."
+
+            });
+
+        }
 
     }
 );
@@ -976,7 +1369,9 @@ router.get(
 
 router.post(
     "/logout",
+
     requireAuth,
+
     async (req, res) => {
 
         try {
@@ -1025,14 +1420,18 @@ router.post(
 
 
             const tokenHash =
-                hashToken(token);
+                hashToken(
+                    token
+                );
 
 
             await pool.query(
                 `
                 DELETE FROM auth_sessions
+
                 WHERE token_hash = $1
                 `,
+
                 [
                     tokenHash
                 ]
@@ -1041,7 +1440,10 @@ router.post(
 
             return res.json({
 
-                success: true
+                success: true,
+
+                message:
+                    "Logged out successfully."
 
             });
 
