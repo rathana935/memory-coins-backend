@@ -1,7 +1,13 @@
 import crypto from "crypto";
 
+
+/* =========================================================
+   CONFIGURATION
+========================================================= */
+
 const BOT_TOKEN =
     process.env.TELEGRAM_BOT_TOKEN;
+
 
 const MAX_AUTH_AGE =
     Number(
@@ -10,19 +16,31 @@ const MAX_AUTH_AGE =
     );
 
 
-/*
-============================================================
-Validate Telegram Mini App initData
-============================================================
-*/
+/* =========================================================
+   VALIDATE CONFIGURATION
+========================================================= */
+
+if (
+    !Number.isFinite(MAX_AUTH_AGE) ||
+    MAX_AUTH_AGE <= 0
+) {
+    throw new Error(
+        "TELEGRAM_AUTH_MAX_AGE_SECONDS must be a positive number"
+    );
+}
+
+
+/* =========================================================
+   VALIDATE TELEGRAM MINI APP INIT DATA
+========================================================= */
 
 export function validateTelegramInitData(
     initData
 ) {
 
-    /* ======================================================
-       CHECK BOT TOKEN
-    ====================================================== */
+    /* =====================================================
+       BOT TOKEN
+    ===================================================== */
 
     if (!BOT_TOKEN) {
 
@@ -33,13 +51,13 @@ export function validateTelegramInitData(
     }
 
 
-    /* ======================================================
-       CHECK INIT DATA
-    ====================================================== */
+    /* =====================================================
+       INIT DATA
+    ===================================================== */
 
     if (
-        !initData ||
-        typeof initData !== "string"
+        typeof initData !== "string" ||
+        initData.trim().length === 0
     ) {
 
         throw new Error(
@@ -49,9 +67,23 @@ export function validateTelegramInitData(
     }
 
 
-    /* ======================================================
+    /*
+       Prevent unnecessarily large input.
+       Telegram Mini App initData should be relatively small.
+    */
+
+    if (initData.length > 10000) {
+
+        throw new Error(
+            "Telegram initData is too large"
+        );
+
+    }
+
+
+    /* =====================================================
        PARSE INIT DATA
-    ====================================================== */
+    ===================================================== */
 
     const params =
         new URLSearchParams(
@@ -59,35 +91,42 @@ export function validateTelegramInitData(
         );
 
 
+    /* =====================================================
+       TELEGRAM HASH
+    ===================================================== */
+
     const receivedHash =
         params.get("hash");
 
 
-    if (!receivedHash) {
+    if (
+        !receivedHash ||
+        !/^[a-f0-9]{64}$/i.test(receivedHash)
+    ) {
 
         throw new Error(
-            "Telegram hash is missing"
+            "Invalid Telegram hash"
         );
 
     }
 
 
-    /* ======================================================
+    /* =====================================================
        REMOVE HASH
-    ====================================================== */
+    ===================================================== */
 
     params.delete("hash");
 
 
-    /* ======================================================
-       CREATE DATA CHECK STRING
-    ====================================================== */
+    /* =====================================================
+       DATA CHECK STRING
+    ===================================================== */
 
     const dataCheckString =
         [...params.entries()]
             .sort(
-                ([a], [b]) =>
-                    a.localeCompare(b)
+                ([keyA], [keyB]) =>
+                    keyA.localeCompare(keyB)
             )
             .map(
                 ([key, value]) =>
@@ -96,9 +135,18 @@ export function validateTelegramInitData(
             .join("\n");
 
 
-    /* ======================================================
-       CREATE TELEGRAM SECRET KEY
-    ====================================================== */
+    if (!dataCheckString) {
+
+        throw new Error(
+            "Telegram authentication data is empty"
+        );
+
+    }
+
+
+    /* =====================================================
+       TELEGRAM SECRET KEY
+    ===================================================== */
 
     const secretKey =
         crypto
@@ -110,9 +158,9 @@ export function validateTelegramInitData(
             .digest();
 
 
-    /* ======================================================
+    /* =====================================================
        CALCULATE TELEGRAM HASH
-    ====================================================== */
+    ===================================================== */
 
     const calculatedHash =
         crypto
@@ -124,36 +172,22 @@ export function validateTelegramInitData(
             .digest("hex");
 
 
-    /* ======================================================
+    /* =====================================================
        SAFE HASH COMPARISON
-    ====================================================== */
+    ===================================================== */
 
-    let receivedBuffer;
-
-    let calculatedBuffer;
-
-
-    try {
-
-        receivedBuffer =
-            Buffer.from(
-                receivedHash,
-                "hex"
-            );
-
-        calculatedBuffer =
-            Buffer.from(
-                calculatedHash,
-                "hex"
-            );
-
-    } catch {
-
-        throw new Error(
-            "Invalid Telegram signature"
+    const receivedBuffer =
+        Buffer.from(
+            receivedHash,
+            "hex"
         );
 
-    }
+
+    const calculatedBuffer =
+        Buffer.from(
+            calculatedHash,
+            "hex"
+        );
 
 
     if (
@@ -182,9 +216,9 @@ export function validateTelegramInitData(
     }
 
 
-    /* ======================================================
-       CHECK AUTH DATE
-    ====================================================== */
+    /* =====================================================
+       AUTH DATE
+    ===================================================== */
 
     const authDate =
         Number(
@@ -193,8 +227,8 @@ export function validateTelegramInitData(
 
 
     if (
-        !authDate ||
-        !Number.isFinite(authDate)
+        !Number.isSafeInteger(authDate) ||
+        authDate <= 0
     ) {
 
         throw new Error(
@@ -203,6 +237,10 @@ export function validateTelegramInitData(
 
     }
 
+
+    /* =====================================================
+       AUTH AGE
+    ===================================================== */
 
     const now =
         Math.floor(
@@ -214,10 +252,20 @@ export function validateTelegramInitData(
         now - authDate;
 
 
-    if (
-        age < 0 ||
-        age > MAX_AUTH_AGE
-    ) {
+    /*
+       Future timestamps are rejected.
+    */
+
+    if (age < 0) {
+
+        throw new Error(
+            "Invalid Telegram authentication date"
+        );
+
+    }
+
+
+    if (age > MAX_AUTH_AGE) {
 
         throw new Error(
             "Telegram authentication data expired"
@@ -226,9 +274,9 @@ export function validateTelegramInitData(
     }
 
 
-    /* ======================================================
-       GET TELEGRAM USER
-    ====================================================== */
+    /* =====================================================
+       TELEGRAM USER
+    ===================================================== */
 
     const userRaw =
         params.get("user");
@@ -262,8 +310,13 @@ export function validateTelegramInitData(
     }
 
 
+    /* =====================================================
+       VALIDATE USER
+    ===================================================== */
+
     if (
         !user ||
+        typeof user !== "object" ||
         !user.id
     ) {
 
@@ -274,37 +327,51 @@ export function validateTelegramInitData(
     }
 
 
-    /* ======================================================
-       GET START PARAM
+    const telegramUserId =
+        Number(user.id);
+
+
+    if (
+        !Number.isSafeInteger(
+            telegramUserId
+        ) ||
+        telegramUserId <= 0
+    ) {
+
+        throw new Error(
+            "Invalid Telegram user ID"
+        );
+
+    }
+
+
+    /* =====================================================
+       START PARAM
        
-       This is important for referrals.
+       Used by the referral system.
 
        Example:
 
-       https://t.me/YourBot?startapp=ref_123456789
-
-       Telegram Mini App initData can contain:
-
        start_param=ref_123456789
-    ====================================================== */
+    ===================================================== */
 
     const startParam =
         params.get("start_param") ||
         null;
 
 
-    /* ======================================================
-       GET QUERY ID
-    ====================================================== */
+    /* =====================================================
+       QUERY ID
+    ===================================================== */
 
     const queryId =
         params.get("query_id") ||
         null;
 
 
-    /* ======================================================
-       RETURN VERIFIED TELEGRAM DATA
-    ====================================================== */
+    /* =====================================================
+       RETURN VERIFIED DATA
+    ===================================================== */
 
     return {
 
@@ -316,11 +383,6 @@ export function validateTelegramInitData(
 
         start_param:
             startParam,
-
-        /*
-        Also expose camelCase version
-        for compatibility.
-        */
 
         startParam
 
