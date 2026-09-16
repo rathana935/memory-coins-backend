@@ -12,23 +12,16 @@ const router = express.Router();
 
 /*
 =========================================================
-WITHDRAWALS
-=========================================================
-
-FaucetPay ONLY
-
-Exchange:
-10,000 coins = $1
-
-Minimum:
-2,500 coins
+CONFIG
 =========================================================
 */
+
+const PROVIDER = "faucetpay";
 
 
 /*
 =========================================================
-HELPER
+HELPERS
 =========================================================
 */
 
@@ -43,21 +36,42 @@ function getUserId(req) {
 }
 
 
+function isValidUUID(value) {
+
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(value);
+
+}
+
+
+function sendError(
+    res,
+    statusCode,
+    error,
+    message
+) {
+
+    return res.status(statusCode).json({
+
+        success: false,
+
+        error,
+
+        message
+
+    });
+
+}
+
+
 /*
 =========================================================
 GET /api/withdrawals/config
 
+Public configuration endpoint.
+
 IMPORTANT:
-This route MUST come BEFORE /:id
-
-Otherwise:
-
-GET /api/withdrawals/config
-
-could be interpreted as:
-
-GET /api/withdrawals/:id
-
+Must come before /:id.
 =========================================================
 */
 
@@ -69,16 +83,14 @@ router.get(
 
             success: true,
 
-            provider:
-                "faucetpay",
+            provider: PROVIDER,
 
             exchangeRate: {
 
                 coins:
                     WITHDRAWAL_CONFIG.COINS_PER_USD,
 
-                usd:
-                    1
+                usd: 1
 
             },
 
@@ -94,6 +106,8 @@ router.get(
 /*
 =========================================================
 POST /api/withdrawals
+
+Create withdrawal request.
 
 Request:
 
@@ -124,24 +138,19 @@ router.post(
 
             if (!userId) {
 
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "AUTHENTICATION_REQUIRED",
-
-                    message:
-                        "Authentication required."
-
-                });
+                return sendError(
+                    res,
+                    401,
+                    "AUTHENTICATION_REQUIRED",
+                    "Authentication required."
+                );
 
             }
 
 
             /*
             -------------------------------------------------
-            READ REQUEST
+            REQUEST BODY
             -------------------------------------------------
             */
 
@@ -154,34 +163,28 @@ router.post(
 
             /*
             -------------------------------------------------
-            FAUCETPAY ONLY
+            PROVIDER
             -------------------------------------------------
             */
 
             if (
                 typeof provider !== "string" ||
-                provider.trim().toLowerCase() !==
-                    "faucetpay"
+                provider.trim().toLowerCase() !== PROVIDER
             ) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "INVALID_PROVIDER",
-
-                    message:
-                        "Only FaucetPay withdrawals are supported."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "INVALID_PROVIDER",
+                    "Only FaucetPay withdrawals are supported."
+                );
 
             }
 
 
             /*
             -------------------------------------------------
-            VALIDATE AMOUNT
+            AMOUNT
             -------------------------------------------------
             */
 
@@ -189,40 +192,26 @@ router.post(
                 Number(amountCoins);
 
 
-            if (
-                !Number.isInteger(amount)
-            ) {
+            if (!Number.isSafeInteger(amount)) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "INVALID_AMOUNT",
-
-                    message:
-                        "Withdrawal amount must be a whole number of coins."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "INVALID_AMOUNT",
+                    "Withdrawal amount must be a whole number of coins."
+                );
 
             }
 
 
-            if (
-                amount <= 0
-            ) {
+            if (amount <= 0) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "INVALID_AMOUNT",
-
-                    message:
-                        "Withdrawal amount must be greater than zero."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "INVALID_AMOUNT",
+                    "Withdrawal amount must be greater than zero."
+                );
 
             }
 
@@ -238,43 +227,32 @@ router.post(
                 WITHDRAWAL_CONFIG.MIN_COINS
             ) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "MINIMUM_WITHDRAWAL",
-
-                    message:
-                        `Minimum withdrawal is ${WITHDRAWAL_CONFIG.MIN_COINS.toLocaleString()} coins.`
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "MINIMUM_WITHDRAWAL",
+                    `Minimum withdrawal is ${WITHDRAWAL_CONFIG.MIN_COINS.toLocaleString()} coins.`
+                );
 
             }
 
 
             /*
             -------------------------------------------------
-            VALIDATE FAUCETPAY EMAIL
+            FAUCETPAY EMAIL
             -------------------------------------------------
             */
 
             if (
-                typeof faucetpayEmail !==
-                    "string"
+                typeof faucetpayEmail !== "string"
             ) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "FAUCETPAY_EMAIL_REQUIRED",
-
-                    message:
-                        "FaucetPay email is required."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "FAUCETPAY_EMAIL_REQUIRED",
+                    "FaucetPay email is required."
+                );
 
             }
 
@@ -287,24 +265,19 @@ router.post(
 
             if (!email) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "FAUCETPAY_EMAIL_REQUIRED",
-
-                    message:
-                        "FaucetPay email is required."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "FAUCETPAY_EMAIL_REQUIRED",
+                    "FaucetPay email is required."
+                );
 
             }
 
 
             /*
             -------------------------------------------------
-            EMAIL FORMAT
+            BASIC EMAIL VALIDATION
             -------------------------------------------------
             */
 
@@ -312,21 +285,14 @@ router.post(
                 /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 
-            if (
-                !emailRegex.test(email)
-            ) {
+            if (!emailRegex.test(email)) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "INVALID_FAUCETPAY_EMAIL",
-
-                    message:
-                        "Please enter a valid FaucetPay email."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "INVALID_FAUCETPAY_EMAIL",
+                    "Please enter a valid FaucetPay email."
+                );
 
             }
 
@@ -346,7 +312,7 @@ router.post(
                         amount,
 
                     provider:
-                        "faucetpay",
+                        PROVIDER,
 
                     faucetpayEmail:
                         email
@@ -381,7 +347,7 @@ router.post(
 
 
             return res.status(
-                error.statusCode || 500
+                Number(error.statusCode) || 500
             ).json({
 
                 success: false,
@@ -407,15 +373,6 @@ router.post(
 GET /api/withdrawals
 
 Get current user's withdrawal history.
-
-Authentication is supplied by server.js:
-
-app.use(
-    "/api/withdrawals",
-    requireAuth,
-    withdrawalsRouter
-);
-
 =========================================================
 */
 
@@ -431,17 +388,12 @@ router.get(
 
             if (!userId) {
 
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "AUTHENTICATION_REQUIRED",
-
-                    message:
-                        "Authentication required."
-
-                });
+                return sendError(
+                    res,
+                    401,
+                    "AUTHENTICATION_REQUIRED",
+                    "Authentication required."
+                );
 
             }
 
@@ -459,9 +411,7 @@ router.get(
                 );
 
 
-            if (
-                !Number.isInteger(limit)
-            ) {
+            if (!Number.isInteger(limit)) {
 
                 limit = 50;
 
@@ -500,19 +450,15 @@ router.get(
 
             /*
             -------------------------------------------------
-            GET HISTORY
+            LOAD HISTORY
             -------------------------------------------------
             */
 
             const withdrawals =
                 await getUserWithdrawals(
-
                     userId,
-
                     limit,
-
                     offset
-
                 );
 
 
@@ -556,9 +502,8 @@ router.get(
 =========================================================
 GET /api/withdrawals/:id
 
-Get ONE withdrawal belonging to the
-currently authenticated user.
-
+Get one withdrawal belonging to
+the authenticated user.
 =========================================================
 */
 
@@ -574,24 +519,19 @@ router.get(
 
             if (!userId) {
 
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "AUTHENTICATION_REQUIRED",
-
-                    message:
-                        "Authentication required."
-
-                });
+                return sendError(
+                    res,
+                    401,
+                    "AUTHENTICATION_REQUIRED",
+                    "Authentication required."
+                );
 
             }
 
 
             /*
             -------------------------------------------------
-            VALIDATE ID
+            VALIDATE UUID
             -------------------------------------------------
             */
 
@@ -601,19 +541,16 @@ router.get(
                 ).trim();
 
 
-            if (!withdrawalId) {
+            if (
+                !isValidUUID(withdrawalId)
+            ) {
 
-                return res.status(400).json({
-
-                    success: false,
-
-                    error:
-                        "INVALID_WITHDRAWAL_ID",
-
-                    message:
-                        "Withdrawal ID is required."
-
-                });
+                return sendError(
+                    res,
+                    400,
+                    "INVALID_WITHDRAWAL_ID",
+                    "Invalid withdrawal ID."
+                );
 
             }
 
@@ -626,11 +563,8 @@ router.get(
 
             const withdrawal =
                 await getWithdrawal(
-
                     withdrawalId,
-
                     userId
-
                 );
 
 
@@ -642,17 +576,12 @@ router.get(
 
             if (!withdrawal) {
 
-                return res.status(404).json({
-
-                    success: false,
-
-                    error:
-                        "WITHDRAWAL_NOT_FOUND",
-
-                    message:
-                        "Withdrawal not found."
-
-                });
+                return sendError(
+                    res,
+                    404,
+                    "WITHDRAWAL_NOT_FOUND",
+                    "Withdrawal not found."
+                );
 
             }
 
@@ -681,7 +610,7 @@ router.get(
 
 
             return res.status(
-                error.statusCode || 500
+                Number(error.statusCode) || 500
             ).json({
 
                 success: false,
