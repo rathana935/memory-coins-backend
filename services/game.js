@@ -40,11 +40,17 @@ const DIFFICULTIES = {
 ========================================================= */
 
 function getDifficultyConfig(difficulty) {
-  return DIFFICULTIES[String(difficulty || "").toLowerCase()] || null;
+  return (
+    DIFFICULTIES[
+      String(difficulty || "").toLowerCase()
+    ] || null
+  );
 }
 
 function normalizeDifficulty(difficulty) {
-  return String(difficulty || "").trim().toLowerCase();
+  return String(difficulty || "")
+    .trim()
+    .toLowerCase();
 }
 
 function randomInt(max) {
@@ -56,7 +62,11 @@ function shuffle(array) {
 
   for (let i = result.length - 1; i > 0; i--) {
     const j = randomInt(i + 1);
-    [result[i], result[j]] = [result[j], result[i]];
+
+    [result[i], result[j]] = [
+      result[j],
+      result[i]
+    ];
   }
 
   return result;
@@ -151,7 +161,8 @@ function calculateLives(lives, lastLifeAt) {
     recovered * LIFE_REGEN_SECONDS;
 
   const newLastLifeAt = new Date(
-    last + consumedRecoverySeconds * 1000
+    last +
+      consumedRecoverySeconds * 1000
   );
 
   return {
@@ -167,7 +178,8 @@ function getNextLifeAt(lives, lastLifeAt) {
 
   if (!lastLifeAt) {
     return new Date(
-      Date.now() + LIFE_REGEN_SECONDS * 1000
+      Date.now() +
+        LIFE_REGEN_SECONDS * 1000
     ).toISOString();
   }
 
@@ -279,14 +291,17 @@ export async function startGame({
       normalizeDifficulty(difficulty);
 
     const config =
-      getDifficultyConfig(normalizedDifficulty);
+      getDifficultyConfig(
+        normalizedDifficulty
+      );
 
     if (!config) {
       const error = new Error(
         "Invalid difficulty."
       );
 
-      error.code = "INVALID_DIFFICULTY";
+      error.code =
+        "INVALID_DIFFICULTY";
 
       throw error;
     }
@@ -303,7 +318,8 @@ export async function startGame({
         "Invalid level."
       );
 
-      error.code = "INVALID_LEVEL";
+      error.code =
+        "INVALID_LEVEL";
 
       throw error;
     }
@@ -314,35 +330,38 @@ export async function startGame({
        LOCK USER
     ------------------------------------------------------- */
 
-    const userResult = await client.query(
-      `
-      SELECT
-        id,
-        telegram_id,
-        coins,
-        lives,
-        last_life_at,
-        easy_level,
-        hard_level,
-        difficult_level
-      FROM users
-      WHERE id = $1
-      FOR UPDATE
-      `,
-      [userId]
-    );
+    const userResult =
+      await client.query(
+        `
+        SELECT
+          id,
+          telegram_id,
+          coins,
+          lives,
+          last_life_at,
+          easy_level,
+          hard_level,
+          difficult_level
+        FROM users
+        WHERE id = $1
+        FOR UPDATE
+        `,
+        [userId]
+      );
 
     if (userResult.rowCount === 0) {
       const error = new Error(
         "User not found."
       );
 
-      error.code = "USER_NOT_FOUND";
+      error.code =
+        "USER_NOT_FOUND";
 
       throw error;
     }
 
-    const user = userResult.rows[0];
+    const user =
+      userResult.rows[0];
 
     /* -------------------------------------------------------
        RECOVER LIVES
@@ -354,7 +373,9 @@ export async function startGame({
         user.last_life_at
       );
 
-    let lives = recovered.lives;
+    let lives =
+      recovered.lives;
+
     let lastLifeAt =
       recovered.lastLifeAt;
 
@@ -389,13 +410,16 @@ export async function startGame({
     ------------------------------------------------------- */
 
     if (lives <= 0) {
-      await client.query("ROLLBACK");
+      await client.query(
+        "ROLLBACK"
+      );
 
       const error = new Error(
         "No lives available."
       );
 
-      error.code = "NO_LIVES";
+      error.code =
+        "NO_LIVES";
 
       error.lives = 0;
 
@@ -421,13 +445,16 @@ export async function startGame({
       requestedLevel >
       currentLevel
     ) {
-      await client.query("ROLLBACK");
+      await client.query(
+        "ROLLBACK"
+      );
 
       const error = new Error(
         "Level is locked."
       );
 
-      error.code = "LEVEL_LOCKED";
+      error.code =
+        "LEVEL_LOCKED";
 
       error.currentLevel =
         currentLevel;
@@ -454,7 +481,9 @@ export async function startGame({
       );
 
     if (activeResult.rowCount > 0) {
-      await client.query("ROLLBACK");
+      await client.query(
+        "ROLLBACK"
+      );
 
       const error = new Error(
         "You already have an active game."
@@ -492,24 +521,17 @@ export async function startGame({
     lives -= 1;
 
     if (lives < MAX_LIVES) {
-      if (!lastLifeAt) {
-        lastLifeAt = new Date();
-      }
+      lastLifeAt = new Date();
     }
 
     /* -------------------------------------------------------
-       CREATE SESSION
+       CREATE GAME SESSION
 
        IMPORTANT:
-       Your current PostgreSQL table still contains the
-       legacy NOT NULL `reward_coins` column.
+       Both reward and reward_coins are written.
 
-       We therefore write BOTH:
-         reward
-         reward_coins
-
-       This keeps the new backend compatible with the
-       existing Render database.
+       reward_coins exists as a legacy NOT NULL column
+       in your current PostgreSQL database.
     ------------------------------------------------------- */
 
     const sessionResult =
@@ -594,7 +616,9 @@ export async function startGame({
       ]
     );
 
-    await client.query("COMMIT");
+    await client.query(
+      "COMMIT"
+    );
 
     return {
       success: true,
@@ -666,7 +690,9 @@ export async function completeGame({
   const client = await pool.connect();
 
   try {
-    await client.query("BEGIN");
+    await client.query(
+      "BEGIN"
+    );
 
     /* -------------------------------------------------------
        GET GAME SESSION
@@ -784,7 +810,9 @@ export async function completeGame({
         [gameSessionId]
       );
 
-      await client.query("COMMIT");
+      await client.query(
+        "COMMIT"
+      );
 
       const error = new Error(
         "Game session expired."
@@ -1179,7 +1207,9 @@ export async function completeGame({
       ]
     );
 
-    await client.query("COMMIT");
+    await client.query(
+      "COMMIT"
+    );
 
     return {
       success: true,
@@ -1217,3 +1247,164 @@ export async function completeGame({
     client.release();
   }
 }
+
+/* =========================================================
+   GET GAME STATUS
+========================================================= */
+
+export async function getGameStatus({
+  userId
+}) {
+  const result =
+    await pool.query(
+      `
+      SELECT
+        id,
+        difficulty,
+        level,
+        pairs,
+        reward,
+        reward_coins,
+        status,
+        started_at,
+        expires_at,
+        completion_token,
+        puzzle,
+        rows,
+        cols,
+        puzzle_hash,
+        matched_pairs,
+        matched_indexes
+      FROM game_sessions
+      WHERE
+        user_id = $1
+        AND status = 'started'
+      ORDER BY started_at DESC
+      LIMIT 1
+      `,
+      [userId]
+    );
+
+  if (result.rowCount === 0) {
+    return {
+      active: false,
+      session: null
+    };
+  }
+
+  const session =
+    result.rows[0];
+
+  /* -------------------------------------------------------
+     CHECK EXPIRATION
+  ------------------------------------------------------- */
+
+  if (
+    session.expires_at &&
+    new Date(session.expires_at)
+      .getTime() <= Date.now()
+  ) {
+    await pool.query(
+      `
+      UPDATE game_sessions
+      SET
+        status = 'expired',
+        completed_at = COALESCE(
+          completed_at,
+          NOW()
+        )
+      WHERE id = $1
+        AND status = 'started'
+      `,
+      [session.id]
+    );
+
+    return {
+      active: false,
+      session: null
+    };
+  }
+
+  /* -------------------------------------------------------
+     PARSE PUZZLE
+  ------------------------------------------------------- */
+
+  let puzzle =
+    session.puzzle;
+
+  if (
+    typeof puzzle === "string"
+  ) {
+    try {
+      puzzle =
+        JSON.parse(puzzle);
+    } catch {
+      puzzle = [];
+    }
+  }
+
+  return {
+    active: true,
+
+    session: {
+      gameSessionId:
+        session.id,
+
+      difficulty:
+        session.difficulty,
+
+      level:
+        Number(session.level),
+
+      pairs:
+        Number(session.pairs),
+
+      rows:
+        Number(session.rows),
+
+      cols:
+        Number(session.cols),
+
+      reward:
+        Number(
+          session.reward ??
+          session.reward_coins ??
+          0
+        ),
+
+      puzzle:
+        sanitizePuzzle(puzzle),
+
+      puzzleHash:
+        session.puzzle_hash,
+
+      completionToken:
+        session.completion_token,
+
+      startedAt:
+        session.started_at,
+
+      expiresAt:
+        session.expires_at,
+
+      matchedPairs:
+        session.matched_pairs,
+
+      matchedIndexes:
+        session.matched_indexes
+    }
+  };
+}
+
+/* =========================================================
+   EXPORTS
+========================================================= */
+
+export {
+  getDifficultyConfig,
+  normalizeDifficulty,
+  calculateLives,
+  getNextLifeAt,
+  sanitizePuzzle,
+  verifyPuzzleSolution
+};
