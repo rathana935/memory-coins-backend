@@ -515,14 +515,6 @@ router.post(
         try {
 
             /* =================================================
-               DATABASE CONNECTION
-            ================================================= */
-
-            client =
-                await pool.connect();
-
-
-            /* =================================================
                READ INIT DATA
             ================================================= */
 
@@ -532,8 +524,7 @@ router.post(
 
 
             if (
-                typeof initData !== "string" ||
-                !initData.trim()
+                typeof initData !== "string"
             ) {
 
                 return res.status(400).json({
@@ -548,13 +539,53 @@ router.post(
             }
 
 
+            /*
+             * IMPORTANT:
+             * Remove accidental whitespace before Telegram
+             * signature validation.
+             */
+
+            const cleanInitData =
+                initData.trim();
+
+
+            if (!cleanInitData) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        "initData is required"
+
+                });
+
+            }
+
+
+            /* =================================================
+               SAFE AUTH DIAGNOSTIC
+            ================================================= */
+
+            console.log(
+                "Telegram auth request received:",
+                {
+                    hasInitData:
+                        true,
+
+                    initDataLength:
+                        cleanInitData.length
+                }
+            );
+
+
             /* =================================================
                VERIFY TELEGRAM INIT DATA
             ================================================= */
 
             const telegram =
                 validateTelegramInitData(
-                    initData
+                    cleanInitData
                 );
 
 
@@ -579,10 +610,35 @@ router.post(
             }
 
 
+            /* =================================================
+               SAFE VERIFIED USER DIAGNOSTIC
+            ================================================= */
+
+            console.log(
+                "Telegram user verified:",
+                {
+                    userId:
+                        tgUser.id,
+
+                    username:
+                        tgUser.username ||
+                        null
+                }
+            );
+
+
             const telegramId =
                 String(
                     tgUser.id
                 );
+
+
+            /* =================================================
+               DATABASE CONNECTION
+            ================================================= */
+
+            client =
+                await pool.connect();
 
 
             /* =================================================
