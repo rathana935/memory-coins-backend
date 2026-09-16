@@ -1,1465 +1,836 @@
-import express from "express";
-import crypto from "crypto";
-
 import pool from "../db/pool.js";
 
-import {
-    validateTelegramInitData
-} from "../telegramAuth.js";
 
-import {
-    requireAuth
-} from "../middleware/auth.js";
+/*
+============================================================
+MEMORY COINS
+LEADERBOARD SERVICE
+============================================================
 
+SECURITY
+------------------------------------------------------------
+The frontend cannot submit:
 
-const router = express.Router();
+- coins
+- score
+- rank
+- username
+- leaderboard position
 
+The server calculates leaderboard values directly from
+PostgreSQL.
 
-/* =========================================================
-   CONFIG
-========================================================= */
+ALL-TIME
+------------------------------------------------------------
+Uses the user's current wallet balance.
 
-const DEFAULT_REFERRAL_REWARD = 250;
-const DEFAULT_SESSION_DAYS = 7;
-const MAX_SESSION_DAYS = 365;
+WEEKLY
+------------------------------------------------------------
+Uses legitimate positive earning transactions created
+during the current PostgreSQL calendar week.
 
+IMPORTANT
+------------------------------------------------------------
+Only explicitly approved earning transaction types are
+included.
 
-/* =========================================================
-   SESSION HELPERS
-========================================================= */
+This prevents unrelated positive transactions such as:
 
-function generateSessionToken() {
+- withdrawal_refund
+- admin_adjustment
 
-    return crypto
-        .randomBytes(48)
-        .toString("hex");
+from being counted as weekly earnings.
 
-}
-
-
-function hashToken(token) {
-
-    return crypto
-        .createHash("sha256")
-        .update(token)
-        .digest("hex");
-
-}
-
-
-/* =========================================================
-   SAFE NUMBER
-========================================================= */
-
-function safeNumber(value, fallback = 0) {
-
-    const number = Number(value);
-
-    return Number.isFinite(number)
-        ? number
-        : fallback;
-
-}
+============================================================
+*/
 
 
-/* =========================================================
-   REFERRAL HELPERS
-========================================================= */
+/*
+============================================================
+CONFIGURATION
+============================================================
+*/
 
-function getReferralCode(telegram) {
+const MAX_LIMIT = 100;
+const DEFAULT_LIMIT = 20;
 
-    return (
-        telegram?.start_param ||
-        telegram?.startParam ||
-        null
+
+/*
+============================================================
+WEEKLY EARNING TRANSACTION TYPES
+============================================================
+
+These must match transaction types used by the rest of
+the backend.
+
+Current backend types include:
+
+game_reward
+daily_bonus
+lucky_roll
+referral
+referral_reward
+ad_reward
+double_game_reward
+
+"referral" is included because the current auth route
+records referral rewards using:
+
+type = "referral"
+
+============================================================
+*/
+
+const WEEKLY_EARNING_TYPES = [
+    "game_reward",
+    "daily_bonus",
+    "lucky_roll",
+    "referral",
+    "referral_reward",
+    "ad_reward",
+    "double_game_reward"
+];
+
+
+/*
+============================================================
+VALIDATE LIMIT
+============================================================
+*/
+
+function normalizeLimit(value) {
+
+    const number =
+        Number(value);
+
+
+    if (
+        !Number.isFinite(number)
+    ) {
+
+        return DEFAULT_LIMIT;
+
+    }
+
+
+    return Math.min(
+        Math.max(
+            Math.floor(number),
+            1
+        ),
+        MAX_LIMIT
     );
 
 }
 
 
-function getReferrerTelegramId(referralCode) {
+/*
+============================================================
+VALIDATE OFFSET
+============================================================
+*/
+
+function normalizeOffset(value) {
+
+    const number =
+        Number(value);
+
 
     if (
-        typeof referralCode !== "string"
+        !Number.isFinite(number)
     ) {
 
-        return null;
+        return 0;
 
     }
 
 
-    const code =
-        referralCode.trim();
-
-
-    if (
-        !code.startsWith("ref_")
-    ) {
-
-        return null;
-
-    }
-
-
-    const telegramId =
-        code.substring(4).trim();
-
-
-    if (
-        !/^\d+$/.test(telegramId)
-    ) {
-
-        return null;
-
-    }
-
-
-    return telegramId;
+    return Math.max(
+        Math.floor(number),
+        0
+    );
 
 }
 
 
-/* =========================================================
-   REFERRAL REWARD
-========================================================= */
+/*
+============================================================
+NORMALIZE USER ID
+============================================================
+*/
 
-async function getReferralReward(client) {
+function normalizeUserId(value) {
 
-    try {
-
-        const result =
-            await client.query(
-                `
-                SELECT value
-                FROM app_settings
-                WHERE key = 'referral'
-                LIMIT 1
-                `
-            );
-
-
-        if (
-            result.rows.length > 0 &&
-            result.rows[0].value
-        ) {
-
-            const settings =
-                result.rows[0].value;
-
-
-            const reward =
-                Number(
-                    settings.reward_coins
-                );
-
-
-            if (
-                Number.isInteger(reward) &&
-                reward > 0
-            ) {
-
-                return reward;
-
-            }
-
-        }
-
-    } catch (error) {
-
-        /*
-         * Referral settings should never prevent
-         * Telegram login from working.
-         */
-
-        console.error(
-            "Failed to load referral settings:",
-            error
-        );
-
-    }
-
-
-    return DEFAULT_REFERRAL_REWARD;
-
-}
-
-
-/* =========================================================
-   USER SERIALIZER
-========================================================= */
-
-function serializeUser(user) {
-
-    if (!user) {
+    if (
+        value === undefined ||
+        value === null ||
+        value === ""
+    ) {
 
         return null;
 
     }
 
 
-    const id =
-        user.id ??
-        user.user_id ??
-        null;
+    return value;
+
+}
 
 
-    const telegramId =
-        user.telegram_id ??
-        user.telegramId ??
-        null;
+/*
+============================================================
+FORMAT LEADERBOARD ROW
+============================================================
+*/
 
-
-    const username =
-        user.username ??
-        null;
-
-
-    const firstName =
-        user.first_name ??
-        user.firstName ??
-        null;
-
-
-    const lastName =
-        user.last_name ??
-        user.lastName ??
-        null;
-
-
-    const photoUrl =
-        user.photo_url ??
-        user.photoUrl ??
-        null;
-
-
-    const languageCode =
-        user.language_code ??
-        user.languageCode ??
-        null;
-
-
-    const isPremium =
-        Boolean(
-            user.is_premium ??
-            user.isPremium ??
-            false
-        );
-
-
-    const coins =
-        safeNumber(
-            user.coins
-        );
-
-
-    const todayCoins =
-        safeNumber(
-            user.today_coins ??
-            user.todayCoins
-        );
-
-
-    const gamesPlayed =
-        safeNumber(
-            user.games_played ??
-            user.gamesPlayed
-        );
-
-
-    const easyGames =
-        safeNumber(
-            user.easy_games ??
-            user.easyGames
-        );
-
-
-    const mediumGames =
-        safeNumber(
-            user.medium_games ??
-            user.mediumGames
-        );
-
-
-    const hardGames =
-        safeNumber(
-            user.hard_games ??
-            user.hardGames
-        );
-
-
-    const easyLevel =
-        safeNumber(
-            user.easy_level ??
-            user.easyLevel,
-            1
-        );
-
-
-    const mediumLevel =
-        safeNumber(
-            user.medium_level ??
-            user.mediumLevel,
-            1
-        );
-
-
-    const hardLevel =
-        safeNumber(
-            user.hard_level ??
-            user.hardLevel,
-            1
-        );
-
-
-    const lives =
-        safeNumber(
-            user.lives,
-            5
-        );
-
-
-    const dailyStreak =
-        safeNumber(
-            user.daily_streak ??
-            user.dailyStreak
-        );
-
-
-    const lastDailyClaim =
-        user.last_daily_claim ??
-        user.lastDailyClaim ??
-        null;
-
-
-    const createdAt =
-        user.created_at ??
-        user.createdAt ??
-        null;
-
+function serializeLeaderboardRow(row) {
 
     return {
 
-        /* =================================================
-           CAMEL CASE
-        ================================================= */
+        rank:
+            Number(
+                row.rank
+            ),
 
-        id,
+        userId:
+            row.id,
 
-        telegramId,
+        username:
+            row.username,
 
-        username,
+        firstName:
+            row.first_name,
 
-        firstName,
+        lastName:
+            row.last_name,
 
-        lastName,
+        photoUrl:
+            row.photo_url,
 
-        photoUrl,
-
-        languageCode,
-
-        isPremium,
-
-        coins,
-
-        todayCoins,
-
-        gamesPlayed,
-
-        easyGames,
-
-        mediumGames,
-
-        hardGames,
-
-        easyLevel,
-
-        mediumLevel,
-
-        hardLevel,
-
-        lives,
-
-        dailyStreak,
-
-        lastDailyClaim,
-
-        createdAt,
-
-
-        /* =================================================
-           SNAKE CASE COMPATIBILITY
-        ================================================= */
-
-        user_id:
-            id,
-
-        telegram_id:
-            telegramId,
-
-        first_name:
-            firstName,
-
-        last_name:
-            lastName,
-
-        photo_url:
-            photoUrl,
-
-        language_code:
-            languageCode,
-
-        is_premium:
-            isPremium,
-
-        today_coins:
-            todayCoins,
-
-        games_played:
-            gamesPlayed,
-
-        easy_games:
-            easyGames,
-
-        medium_games:
-            mediumGames,
-
-        hard_games:
-            hardGames,
-
-        easy_level:
-            easyLevel,
-
-        medium_level:
-            mediumLevel,
-
-        hard_level:
-            hardLevel,
-
-        daily_streak:
-            dailyStreak,
-
-        last_daily_claim:
-            lastDailyClaim,
-
-        created_at:
-            createdAt
+        coins:
+            Number(
+                row.coins || 0
+            )
 
     };
 
 }
 
 
-/* =========================================================
-   USER SELECT
-========================================================= */
+/*
+============================================================
+GET ALL-TIME LEADERBOARD
+============================================================
 
-const USER_SELECT = `
+Ranking is based on the user's CURRENT wallet balance.
 
-    id,
+Therefore:
 
-    telegram_id,
+withdrawals reduce the leaderboard balance.
 
-    username,
+refunds increase the current balance.
 
-    first_name,
+This represents current wallet balance rather than
+historical lifetime earnings.
 
-    last_name,
+============================================================
+*/
 
-    photo_url,
+export async function getAllTimeLeaderboard(
+    options = {}
+) {
 
-    language_code,
+    const limit =
+        normalizeLimit(
+            options.limit
+        );
 
-    is_premium,
 
-    coins,
+    const offset =
+        normalizeOffset(
+            options.offset
+        );
 
-    today_coins,
 
-    games_played,
+    const userId =
+        normalizeUserId(
+            options.userId
+        );
 
-    easy_games,
 
-    medium_games,
+    /*
+    --------------------------------------------------------
+    LEADERBOARD
+    --------------------------------------------------------
+    */
 
-    hard_games,
+    const result =
+        await pool.query(
+            `
+            WITH ranked AS (
 
-    easy_level,
+                SELECT
 
-    medium_level,
+                    u.id,
 
-    hard_level,
+                    u.username,
 
-    lives,
+                    u.first_name,
 
-    daily_streak,
+                    u.last_name,
 
-    last_daily_claim,
+                    u.photo_url,
 
-    created_at
+                    u.coins,
 
-`;
+                    RANK() OVER (
+                        ORDER BY
+                            u.coins DESC,
+                            u.created_at ASC,
+                            u.id ASC
+                    ) AS rank
 
+                FROM users u
 
-/* =========================================================
-   POST /api/auth/telegram
-========================================================= */
+                WHERE
+                    u.is_blocked = FALSE
 
-router.post(
-    "/telegram",
+                    AND u.coins >= 0
+            )
 
-    async (req, res) => {
+            SELECT
 
-        let client;
+                id,
 
+                username,
 
-        try {
+                first_name,
 
-            /* =================================================
-               DATABASE CONNECTION
-            ================================================= */
+                last_name,
 
-            client =
-                await pool.connect();
+                photo_url,
 
+                coins,
 
-            /* =================================================
-               READ INIT DATA
-            ================================================= */
+                rank
 
-            const {
-                initData
-            } = req.body || {};
+            FROM ranked
 
+            ORDER BY
+                rank ASC,
+                id ASC
 
-            if (
-                typeof initData !== "string" ||
-                !initData.trim()
-            ) {
+            LIMIT $1
+            OFFSET $2
+            `,
+            [
+                limit,
+                offset
+            ]
+        );
 
-                return res.status(400).json({
 
-                    success: false,
+    /*
+    --------------------------------------------------------
+    CURRENT USER RANK
+    --------------------------------------------------------
+    */
 
-                    error:
-                        "initData is required"
+    let currentUser = null;
 
-                });
 
-            }
+    if (userId) {
 
-
-            /* =================================================
-               VERIFY TELEGRAM INIT DATA
-            ================================================= */
-
-            const telegram =
-                validateTelegramInitData(
-                    initData
-                );
-
-
-            const tgUser =
-                telegram?.user;
-
-
-            if (
-                !tgUser ||
-                !tgUser.id
-            ) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "Telegram user information is missing."
-
-                });
-
-            }
-
-
-            const telegramId =
-                String(
-                    tgUser.id
-                );
-
-
-            /* =================================================
-               REFERRAL
-            ================================================= */
-
-            const referralCode =
-                getReferralCode(
-                    telegram
-                );
-
-
-            const referrerTelegramId =
-                getReferrerTelegramId(
-                    referralCode
-                );
-
-
-            /* =================================================
-               START TRANSACTION
-            ================================================= */
-
-            await client.query(
-                "BEGIN"
-            );
-
-
-            /* =================================================
-               CHECK EXISTING USER
-            ================================================= */
-
-            const existingUserResult =
-                await client.query(
-                    `
-                    SELECT
-                        id,
-                        telegram_id
-                    FROM users
-                    WHERE telegram_id = $1
-                    FOR UPDATE
-                    `,
-                    [
-                        telegramId
-                    ]
-                );
-
-
-            const isNewUser =
-                existingUserResult.rows.length === 0;
-
-
-            /* =================================================
-               CREATE / UPDATE USER
-            ================================================= */
-
-            const userResult =
-                await client.query(
-                    `
-                    INSERT INTO users
-                    (
-                        telegram_id,
-                        username,
-                        first_name,
-                        last_name,
-                        photo_url,
-                        language_code,
-                        is_premium,
-                        last_seen_at,
-                        updated_at
-                    )
-
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4,
-                        $5,
-                        $6,
-                        $7,
-                        NOW(),
-                        NOW()
-                    )
-
-                    ON CONFLICT (
-                        telegram_id
-                    )
-
-                    DO UPDATE SET
-
-                        username =
-                            EXCLUDED.username,
-
-                        first_name =
-                            EXCLUDED.first_name,
-
-                        last_name =
-                            EXCLUDED.last_name,
-
-                        photo_url =
-                            EXCLUDED.photo_url,
-
-                        language_code =
-                            EXCLUDED.language_code,
-
-                        is_premium =
-                            EXCLUDED.is_premium,
-
-                        last_seen_at =
-                            NOW(),
-
-                        updated_at =
-                            NOW()
-
-                    RETURNING
-
-                        ${USER_SELECT}
-                    `,
-
-                    [
-
-                        telegramId,
-
-                        tgUser.username ||
-                            null,
-
-                        tgUser.first_name ||
-                            null,
-
-                        tgUser.last_name ||
-                            null,
-
-                        tgUser.photo_url ||
-                            null,
-
-                        tgUser.language_code ||
-                            null,
-
-                        Boolean(
-                            tgUser.is_premium
-                        )
-
-                    ]
-                );
-
-
-            const user =
-                userResult.rows[0];
-
-
-            if (!user) {
-
-                throw new Error(
-                    "Unable to create or load user."
-                );
-
-            }
-
-
-            /* =================================================
-               REFERRAL PROCESSING
-            ================================================= */
-
-            let referralCreated =
-                false;
-
-
-            let referralReward =
-                0;
-
-
-            if (
-                isNewUser &&
-                referrerTelegramId &&
-                referrerTelegramId !== telegramId
-            ) {
-
-                const configuredReward =
-                    await getReferralReward(
-                        client
-                    );
-
-
-                /* =============================================
-                   FIND REFERRER
-                ============================================= */
-
-                const referrerResult =
-                    await client.query(
-                        `
-                        SELECT
-                            id,
-                            telegram_id,
-                            coins,
-                            today_coins
-                        FROM users
-                        WHERE telegram_id = $1
-                        FOR UPDATE
-                        `,
-                        [
-                            referrerTelegramId
-                        ]
-                    );
-
-
-                if (
-                    referrerResult.rows.length > 0
-                ) {
-
-                    const referrer =
-                        referrerResult.rows[0];
-
-
-                    /* =========================================
-                       CHECK DUPLICATE REFERRAL
-                    ========================================= */
-
-                    const existingReferralResult =
-                        await client.query(
-                            `
-                            SELECT id
-                            FROM referrals
-                            WHERE referred_user_id = $1
-                            LIMIT 1
-                            `,
-                            [
-                                user.id
-                            ]
-                        );
-
-
-                    if (
-                        existingReferralResult
-                            .rows
-                            .length === 0
-                    ) {
-
-                        const balanceBefore =
-                            safeNumber(
-                                referrer.coins
-                            );
-
-
-                        const balanceAfter =
-                            balanceBefore +
-                            configuredReward;
-
-
-                        /* =====================================
-                           CREATE REFERRAL
-                        ===================================== */
-
-                        const referralResult =
-                            await client.query(
-                                `
-                                INSERT INTO referrals
-                                (
-                                    referrer_user_id,
-                                    referred_user_id,
-                                    reward_coins,
-                                    status,
-                                    created_at,
-                                    completed_at
-                                )
-
-                                VALUES
-                                (
-                                    $1,
-                                    $2,
-                                    $3,
-                                    'completed',
-                                    NOW(),
-                                    NOW()
-                                )
-
-                                ON CONFLICT (
-                                    referred_user_id
-                                )
-
-                                DO NOTHING
-
-                                RETURNING id
-                                `,
-                                [
-                                    referrer.id,
-                                    user.id,
-                                    configuredReward
-                                ]
-                            );
-
-
-                        if (
-                            referralResult.rows.length > 0
-                        ) {
-
-                            const referralId =
-                                referralResult
-                                    .rows[0]
-                                    .id;
-
-
-                            /* =================================
-                               ADD REFERRAL REWARD
-                            ================================= */
-
-                            await client.query(
-                                `
-                                UPDATE users
-
-                                SET
-
-                                    coins =
-                                        coins + $1,
-
-                                    today_coins =
-                                        today_coins + $1,
-
-                                    updated_at =
-                                        NOW()
-
-                                WHERE id = $2
-                                `,
-                                [
-                                    configuredReward,
-                                    referrer.id
-                                ]
-                            );
-
-
-                            /* =================================
-                               RECORD TRANSACTION
-                            ================================= */
-
-                            await client.query(
-                                `
-                                INSERT INTO coin_transactions
-                                (
-                                    user_id,
-                                    type,
-                                    amount,
-                                    balance_before,
-                                    balance_after,
-                                    reference_id,
-                                    description
-                                )
-
-                                VALUES
-                                (
-                                    $1,
-                                    $2,
-                                    $3,
-                                    $4,
-                                    $5,
-                                    $6,
-                                    $7
-                                )
-                                `,
-                                [
-
-                                    referrer.id,
-
-                                    "referral",
-
-                                    configuredReward,
-
-                                    balanceBefore,
-
-                                    balanceAfter,
-
-                                    referralId,
-
-                                    "Referral reward for inviting a new user."
-
-                                ]
-                            );
-
-
-                            referralCreated =
-                                true;
-
-
-                            referralReward =
-                                configuredReward;
-
-                        }
-
-                    }
-
-                }
-
-            }
-
-
-            /* =================================================
-               REFRESH USER
-            ================================================= */
-
-            const refreshedUserResult =
-                await client.query(
-                    `
-                    SELECT
-
-                        ${USER_SELECT}
-
-                    FROM users
-
-                    WHERE id = $1
-
-                    LIMIT 1
-                    `,
-                    [
-                        user.id
-                    ]
-                );
-
-
-            const finalUser =
-                refreshedUserResult.rows[0];
-
-
-            if (!finalUser) {
-
-                throw new Error(
-                    "Unable to load authenticated user."
-                );
-
-            }
-
-
-            /* =================================================
-               SESSION CONFIG
-            ================================================= */
-
-            let sessionDays =
-                Number(
-                    process.env.SESSION_DAYS ||
-                    DEFAULT_SESSION_DAYS
-                );
-
-
-            if (
-                !Number.isFinite(sessionDays) ||
-                sessionDays <= 0
-            ) {
-
-                sessionDays =
-                    DEFAULT_SESSION_DAYS;
-
-            }
-
-
-            sessionDays =
-                Math.min(
-                    Math.floor(sessionDays),
-                    MAX_SESSION_DAYS
-                );
-
-
-            /* =================================================
-               CREATE SESSION TOKEN
-            ================================================= */
-
-            const sessionToken =
-                generateSessionToken();
-
-
-            const tokenHash =
-                hashToken(
-                    sessionToken
-                );
-
-
-            /* =================================================
-               INSERT SESSION
-            ================================================= */
-
-            await client.query(
-                `
-                INSERT INTO auth_sessions
-                (
-                    user_id,
-                    token_hash,
-                    expires_at,
-                    user_agent,
-                    ip_address
-                )
-
-                VALUES
-                (
-                    $1,
-                    $2,
-                    NOW() +
-                        ($3 * INTERVAL '1 day'),
-                    $4,
-                    $5
-                )
-                `,
-                [
-
-                    finalUser.id,
-
-                    tokenHash,
-
-                    sessionDays,
-
-                    req.headers["user-agent"] ||
-                        null,
-
-                    req.ip ||
-                        null
-
-                ]
-            );
-
-
-            /* =================================================
-               DELETE OLD / EXPIRED SESSIONS
-            ================================================= */
-
-            await client.query(
-                `
-                DELETE FROM auth_sessions
-
-                WHERE user_id = $1
-
-                  AND expires_at < NOW()
-                `,
-                [
-                    finalUser.id
-                ]
-            );
-
-
-            /* =================================================
-               COMMIT
-            ================================================= */
-
-            await client.query(
-                "COMMIT"
-            );
-
-
-            /* =================================================
-               SERIALIZE USER
-            ================================================= */
-
-            const serializedUser =
-                serializeUser(
-                    finalUser
-                );
-
-
-            /* =================================================
-               SUCCESS
-            ================================================= */
-
-            return res.json({
-
-                success: true,
-
-                token:
-                    sessionToken,
-
-                accessToken:
-                    sessionToken,
-
-                tokenType:
-                    "Bearer",
-
-                expiresIn:
-                    sessionDays *
-                    24 *
-                    60 *
-                    60,
-
-                referral: {
-
-                    created:
-                        referralCreated,
-
-                    rewardCoins:
-                        referralReward,
-
-                    reward_coins:
-                        referralReward
-
-                },
-
-                user:
-                    serializedUser
-
-            });
-
-
-        } catch (error) {
-
-            /* =================================================
-               ROLLBACK
-            ================================================= */
-
-            if (client) {
-
-                try {
-
-                    await client.query(
-                        "ROLLBACK"
-                    );
-
-                } catch (rollbackError) {
-
-                    console.error(
-                        "Authentication rollback error:",
-                        rollbackError
-                    );
-
-                }
-
-            }
-
-
-            console.error(
-                "Telegram authentication error:",
-                error
-            );
-
-
-            /*
-             * Telegram validation errors normally come from
-             * validateTelegramInitData().
-             */
-
-            const statusCode =
-                Number.isInteger(
-                    error?.statusCode
-                )
-                    ? error.statusCode
-                    : 401;
-
-
-            return res.status(
-                statusCode
-            ).json({
-
-                success: false,
-
-                error:
-                    error?.message ||
-                    "Telegram authentication failed"
-
-            });
-
-        } finally {
-
-            if (client) {
-
-                client.release();
-
-            }
-
-        }
-
-    }
-);
-
-
-/* =========================================================
-   GET /api/auth/me
-========================================================= */
-
-router.get(
-    "/me",
-
-    requireAuth,
-
-    async (req, res) => {
-
-        try {
-
-            const userId =
-                req.user.user_id ||
-                req.user.id;
-
-
-            if (!userId) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "Authenticated user ID is missing."
-
-                });
-
-            }
-
-
-            const result =
-                await pool.query(
-                    `
-                    SELECT
-
-                        ${USER_SELECT}
-
-                    FROM users
-
-                    WHERE id = $1
-
-                    LIMIT 1
-                    `,
-                    [
-                        userId
-                    ]
-                );
-
-
-            if (
-                result.rowCount === 0
-            ) {
-
-                return res.status(404).json({
-
-                    success: false,
-
-                    error:
-                        "User not found."
-
-                });
-
-            }
-
-
-            const user =
-                serializeUser(
-                    result.rows[0]
-                );
-
-
-            return res.json({
-
-                success: true,
-
-                user
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "Auth /me error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                error:
-                    "Unable to load user."
-
-            });
-
-        }
-
-    }
-);
-
-
-/* =========================================================
-   POST /api/auth/logout
-========================================================= */
-
-router.post(
-    "/logout",
-
-    requireAuth,
-
-    async (req, res) => {
-
-        try {
-
-            const header =
-                req.headers.authorization;
-
-
-            if (
-                typeof header !== "string" ||
-                !header.startsWith("Bearer ")
-            ) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "Authentication token is required."
-
-                });
-
-            }
-
-
-            const token =
-                header
-                    .substring(7)
-                    .trim();
-
-
-            if (!token) {
-
-                return res.status(401).json({
-
-                    success: false,
-
-                    error:
-                        "Authentication token is required."
-
-                });
-
-            }
-
-
-            const tokenHash =
-                hashToken(
-                    token
-                );
-
-
+        const userResult =
             await pool.query(
                 `
-                DELETE FROM auth_sessions
+                WITH ranked AS (
 
-                WHERE token_hash = $1
+                    SELECT
+
+                        u.id,
+
+                        u.username,
+
+                        u.first_name,
+
+                        u.last_name,
+
+                        u.photo_url,
+
+                        u.coins,
+
+                        RANK() OVER (
+                            ORDER BY
+                                u.coins DESC,
+                                u.created_at ASC,
+                                u.id ASC
+                        ) AS rank
+
+                    FROM users u
+
+                    WHERE
+                        u.is_blocked = FALSE
+
+                        AND u.coins >= 0
+                )
+
+                SELECT
+
+                    id,
+
+                    username,
+
+                    first_name,
+
+                    last_name,
+
+                    photo_url,
+
+                    coins,
+
+                    rank
+
+                FROM ranked
+
+                WHERE
+                    id = $1
+
+                LIMIT 1
                 `,
                 [
-                    tokenHash
+                    userId
                 ]
             );
 
 
-            return res.json({
+        if (
+            userResult.rows.length > 0
+        ) {
 
-                success: true,
-
-                message:
-                    "Logged out successfully."
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "Logout error:",
-                error
-            );
-
-
-            return res.status(500).json({
-
-                success: false,
-
-                error:
-                    "Logout failed."
-
-            });
+            currentUser =
+                serializeLeaderboardRow(
+                    userResult.rows[0]
+                );
 
         }
 
     }
-);
 
 
-/* =========================================================
-   EXPORT
-========================================================= */
+    /*
+    --------------------------------------------------------
+    TOTAL ACTIVE PLAYERS
+    --------------------------------------------------------
+    */
 
-export default router;
+    const countResult =
+        await pool.query(
+            `
+            SELECT
+                COUNT(*)::INTEGER AS total
+
+            FROM users
+
+            WHERE
+                is_blocked = FALSE
+            `
+        );
+
+
+    /*
+    --------------------------------------------------------
+    RETURN
+    --------------------------------------------------------
+    */
+
+    return {
+
+        success: true,
+
+        period:
+            "all_time",
+
+        players:
+            Number(
+                countResult.rows[0].total
+            ),
+
+        leaderboard:
+            result.rows.map(
+                serializeLeaderboardRow
+            ),
+
+        currentUser
+
+    };
+
+}
+
+
+/*
+============================================================
+GET WEEKLY LEADERBOARD
+============================================================
+
+The PostgreSQL date_trunc('week', NOW()) starts the week
+on Monday.
+
+Only whitelisted positive earning transactions count.
+
+============================================================
+*/
+
+export async function getWeeklyLeaderboard(
+    options = {}
+) {
+
+    const limit =
+        normalizeLimit(
+            options.limit
+        );
+
+
+    const offset =
+        normalizeOffset(
+            options.offset
+        );
+
+
+    const userId =
+        normalizeUserId(
+            options.userId
+        );
+
+
+    /*
+    --------------------------------------------------------
+    LEADERBOARD
+    --------------------------------------------------------
+    */
+
+    const result =
+        await pool.query(
+            `
+            WITH weekly_coins AS (
+
+                SELECT
+
+                    u.id,
+
+                    u.username,
+
+                    u.first_name,
+
+                    u.last_name,
+
+                    u.photo_url,
+
+                    COALESCE(
+                        SUM(ct.amount),
+                        0
+                    )::BIGINT AS coins
+
+                FROM users u
+
+                LEFT JOIN coin_transactions ct
+
+                    ON ct.user_id = u.id
+
+                    AND ct.created_at >=
+                        date_trunc(
+                            'week',
+                            NOW()
+                        )
+
+                    AND ct.amount > 0
+
+                    AND ct.type = ANY(
+                        $1::VARCHAR[]
+                    )
+
+                WHERE
+                    u.is_blocked = FALSE
+
+                GROUP BY
+
+                    u.id,
+
+                    u.username,
+
+                    u.first_name,
+
+                    u.last_name,
+
+                    u.photo_url
+
+            ),
+
+            ranked AS (
+
+                SELECT
+
+                    weekly_coins.*,
+
+                    RANK() OVER (
+                        ORDER BY
+                            coins DESC,
+                            id ASC
+                    ) AS rank
+
+                FROM weekly_coins
+
+            )
+
+            SELECT
+
+                id,
+
+                username,
+
+                first_name,
+
+                last_name,
+
+                photo_url,
+
+                coins,
+
+                rank
+
+            FROM ranked
+
+            ORDER BY
+                rank ASC,
+                id ASC
+
+            LIMIT $2
+            OFFSET $3
+            `,
+            [
+                WEEKLY_EARNING_TYPES,
+                limit,
+                offset
+            ]
+        );
+
+
+    /*
+    --------------------------------------------------------
+    CURRENT USER WEEKLY RANK
+    --------------------------------------------------------
+    */
+
+    let currentUser = null;
+
+
+    if (userId) {
+
+        const userResult =
+            await pool.query(
+                `
+                WITH weekly_coins AS (
+
+                    SELECT
+
+                        u.id,
+
+                        u.username,
+
+                        u.first_name,
+
+                        u.last_name,
+
+                        u.photo_url,
+
+                        COALESCE(
+                            SUM(ct.amount),
+                            0
+                        )::BIGINT AS coins
+
+                    FROM users u
+
+                    LEFT JOIN coin_transactions ct
+
+                        ON ct.user_id = u.id
+
+                        AND ct.created_at >=
+                            date_trunc(
+                                'week',
+                                NOW()
+                            )
+
+                        AND ct.amount > 0
+
+                        AND ct.type = ANY(
+                            $1::VARCHAR[]
+                        )
+
+                    WHERE
+                        u.is_blocked = FALSE
+
+                    GROUP BY
+
+                        u.id,
+
+                        u.username,
+
+                        u.first_name,
+
+                        u.last_name,
+
+                        u.photo_url
+
+                ),
+
+                ranked AS (
+
+                    SELECT
+
+                        weekly_coins.*,
+
+                        RANK() OVER (
+                            ORDER BY
+                                coins DESC,
+                                id ASC
+                        ) AS rank
+
+                    FROM weekly_coins
+
+                )
+
+                SELECT
+
+                    id,
+
+                    username,
+
+                    first_name,
+
+                    last_name,
+
+                    photo_url,
+
+                    coins,
+
+                    rank
+
+                FROM ranked
+
+                WHERE
+                    id = $2
+
+                LIMIT 1
+                `,
+                [
+                    WEEKLY_EARNING_TYPES,
+                    userId
+                ]
+            );
+
+
+        if (
+            userResult.rows.length > 0
+        ) {
+
+            currentUser =
+                serializeLeaderboardRow(
+                    userResult.rows[0]
+                );
+
+        }
+
+    }
+
+
+    /*
+    --------------------------------------------------------
+    TOTAL ACTIVE PLAYERS
+    --------------------------------------------------------
+    */
+
+    const countResult =
+        await pool.query(
+            `
+            SELECT
+                COUNT(*)::INTEGER AS total
+
+            FROM users
+
+            WHERE
+                is_blocked = FALSE
+            `
+        );
+
+
+    /*
+    --------------------------------------------------------
+    RETURN
+    --------------------------------------------------------
+    */
+
+    return {
+
+        success: true,
+
+        period:
+            "weekly",
+
+        players:
+            Number(
+                countResult.rows[0].total
+            ),
+
+        leaderboard:
+            result.rows.map(
+                serializeLeaderboardRow
+            ),
+
+        currentUser
+
+    };
+
+}
+
+
+/*
+============================================================
+GET LEADERBOARD
+============================================================
+
+Supported:
+
+weekly
+all_time
+
+Unknown values fall back to all_time.
+
+The route already validates the period, but keeping this
+fallback makes the service safe if it is called directly
+from another backend module.
+
+============================================================
+*/
+
+export async function getLeaderboard(
+    period,
+    options = {}
+) {
+
+    if (
+        String(period).toLowerCase() ===
+        "weekly"
+    ) {
+
+        return getWeeklyLeaderboard(
+            options
+        );
+
+    }
+
+
+    return getAllTimeLeaderboard(
+        options
+    );
+
+}
