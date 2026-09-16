@@ -26,13 +26,12 @@ const isProduction =
    SAFE NUMBER HELPER
 ========================================================= */
 
-function getPositiveNumber(
+function getPositiveInteger(
     value,
     fallback
 ) {
 
-    const number =
-        Number(value);
+    const number = Number(value);
 
     if (
         !Number.isFinite(number) ||
@@ -41,7 +40,7 @@ function getPositiveNumber(
         return fallback;
     }
 
-    return number;
+    return Math.floor(number);
 }
 
 
@@ -50,29 +49,21 @@ function getPositiveNumber(
 ========================================================= */
 
 const maxConnections =
-    Math.floor(
-        getPositiveNumber(
-            process.env.DB_POOL_MAX,
-            10
-        )
+    getPositiveInteger(
+        process.env.DB_POOL_MAX,
+        10
     );
-
 
 const idleTimeoutMillis =
-    Math.floor(
-        getPositiveNumber(
-            process.env.DB_IDLE_TIMEOUT_MS,
-            30000
-        )
+    getPositiveInteger(
+        process.env.DB_IDLE_TIMEOUT_MS,
+        30000
     );
 
-
 const connectionTimeoutMillis =
-    Math.floor(
-        getPositiveNumber(
-            process.env.DB_CONNECTION_TIMEOUT_MS,
-            10000
-        )
+    getPositiveInteger(
+        process.env.DB_CONNECTION_TIMEOUT_MS,
+        10000
     );
 
 
@@ -80,28 +71,33 @@ const connectionTimeoutMillis =
    POSTGRESQL CONNECTION POOL
 ========================================================= */
 
-const pool =
-    new Pool({
+const pool = new Pool({
 
-        connectionString:
-            process.env.DATABASE_URL,
+    connectionString:
+        process.env.DATABASE_URL,
 
-        max:
-            maxConnections,
+    max:
+        maxConnections,
 
-        idleTimeoutMillis:
-            idleTimeoutMillis,
+    idleTimeoutMillis:
+        idleTimeoutMillis,
 
-        connectionTimeoutMillis:
-            connectionTimeoutMillis,
+    connectionTimeoutMillis:
+        connectionTimeoutMillis,
 
-        ssl:
-            isProduction
-                ? {
-                    rejectUnauthorized: false
-                }
-                : false
-    });
+    /*
+       Render PostgreSQL uses SSL in production.
+       rejectUnauthorized:false is commonly required
+       for managed PostgreSQL connections.
+    */
+
+    ssl:
+        isProduction
+            ? {
+                rejectUnauthorized: false
+            }
+            : false
+});
 
 
 /* =========================================================
@@ -122,7 +118,7 @@ pool.on(
 
 
 /* =========================================================
-   OPTIONAL CONNECTION TEST
+   DATABASE CONNECTION TEST
 ========================================================= */
 
 export async function testDatabaseConnection() {
@@ -143,6 +139,17 @@ export async function testDatabaseConnection() {
         client.release();
 
     }
+}
+
+
+/* =========================================================
+   GRACEFUL DATABASE SHUTDOWN
+========================================================= */
+
+export async function closeDatabase() {
+
+    await pool.end();
+
 }
 
 
