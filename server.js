@@ -40,8 +40,18 @@ const NODE_ENV =
 
 const ADSGRAM_BLOCK_ID =
     String(
-        process.env.ADSGRAM_BLOCK_ID || "48045"
+        process.env.ADSGRAM_BLOCK_ID || "48148"
     );
+
+
+/* =========================================================
+   FRONTEND
+========================================================= */
+
+const FRONTEND_URL =
+    String(
+        process.env.FRONTEND_URL || ""
+    ).trim();
 
 
 /* =========================================================
@@ -64,9 +74,78 @@ app.use(
     })
 );
 
+
+/* =========================================================
+   CORS
+========================================================= */
+
 app.use(
     cors({
-        origin: true,
+        origin: (
+            origin,
+            callback
+        ) => {
+
+            /*
+             * Allow requests without an Origin header.
+             *
+             * This is useful for:
+             * - Telegram WebView
+             * - server-to-server requests
+             * - health checks
+             */
+
+            if (!origin) {
+                return callback(
+                    null,
+                    true
+                );
+            }
+
+
+            /*
+             * If FRONTEND_URL is configured,
+             * only allow that frontend.
+             */
+
+            if (
+                FRONTEND_URL &&
+                origin === FRONTEND_URL
+            ) {
+
+                return callback(
+                    null,
+                    true
+                );
+
+            }
+
+
+            /*
+             * Development / fallback mode.
+             *
+             * If FRONTEND_URL is not configured,
+             * allow the request.
+             */
+
+            if (!FRONTEND_URL) {
+
+                return callback(
+                    null,
+                    true
+                );
+
+            }
+
+
+            return callback(
+                new Error(
+                    "CORS origin not allowed."
+                )
+            );
+
+        },
+
         credentials: false
     })
 );
@@ -96,51 +175,85 @@ app.use(
 
 const generalLimiter =
     rateLimit({
-        windowMs: 60 * 1000,
-        max: 120,
 
-        standardHeaders: true,
-        legacyHeaders: false,
+        windowMs:
+            60 * 1000,
+
+        max:
+            120,
+
+        standardHeaders:
+            true,
+
+        legacyHeaders:
+            false,
 
         message: {
             success: false,
+            code:
+                "RATE_LIMITED",
             message:
                 "Too many requests. Please try again later."
         }
+
     });
 
 
 const authLimiter =
     rateLimit({
-        windowMs: 15 * 60 * 1000,
-        max: 30,
 
-        standardHeaders: true,
-        legacyHeaders: false,
+        windowMs:
+            15 * 60 * 1000,
+
+        max:
+            30,
+
+        standardHeaders:
+            true,
+
+        legacyHeaders:
+            false,
 
         message: {
             success: false,
+            code:
+                "AUTH_RATE_LIMITED",
             message:
                 "Too many authentication requests."
         }
+
     });
 
 
 const adsgramLimiter =
     rateLimit({
-        windowMs: 60 * 1000,
-        max: 60,
 
-        standardHeaders: true,
-        legacyHeaders: false,
+        windowMs:
+            60 * 1000,
+
+        max:
+            60,
+
+        standardHeaders:
+            true,
+
+        legacyHeaders:
+            false,
 
         message: {
             success: false,
+            code:
+                "AD_RATE_LIMITED",
             message:
                 "Too many ad reward requests."
         }
+
     });
 
+
+/* =========================================================
+   GENERAL RATE LIMIT
+========================================================= */
 
 app.use(
     generalLimiter
@@ -148,14 +261,14 @@ app.use(
 
 
 /* =========================================================
-   BASIC ROOT ROUTE
+   ROOT ROUTE
 ========================================================= */
 
 app.get(
     "/",
     (req, res) => {
 
-        res.json({
+        return res.json({
 
             success: true,
 
@@ -222,7 +335,8 @@ app.get(
                 "SELECT 1"
             );
 
-            res.json({
+
+            return res.json({
 
                 success: true,
 
@@ -254,7 +368,8 @@ app.get(
                 error
             );
 
-            res.status(503).json({
+
+            return res.status(503).json({
 
                 success: false,
 
@@ -279,30 +394,30 @@ app.get(
 
 
 /* =========================================================
-   ADSGRAM REWARD CALLBACK
+   ADSGRAM REWARD URL CALLBACK
 =========================================================
 
-   AdsGram calls:
+AdsGram:
 
-   GET
-   /api/adsgram/reward?userid=[telegramUserId]
+GET /api/adsgram/reward?userid=[userId]
 
-   IMPORTANT:
+IMPORTANT:
 
-   This endpoint MUST remain public because AdsGram
-   does not have the user's Bearer session token.
+This endpoint is intentionally PUBLIC.
 
-   Security is handled by the backend's pending
-   ad-intent system.
+AdsGram does not have the user's Bearer
+session token.
 
-   The server does NOT trust:
+The backend does NOT trust:
 
-       ad_type
-       reward amount
-       coins
-       balance
+- reward amount
+- coins
+- balance
+- ad type from the URL
+- game session from the client
 
-   from the client.
+The callback only confirms an existing
+server-created pending reward intent.
 
 ========================================================= */
 
@@ -328,6 +443,9 @@ app.get(
 
                     success: false,
 
+                    code:
+                        "MISSING_USER_ID",
+
                     message:
                         "Missing userid."
 
@@ -336,7 +454,36 @@ app.get(
             }
 
 
-            const reward =
+            /*
+             * Basic Telegram ID validation.
+             */
+
+            if (
+                !/^\d{1,20}$/.test(
+                    telegramId
+                )
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    code:
+                        "INVALID_USER_ID",
+
+                    message:
+                        "Invalid userid."
+
+                });
+
+            }
+
+
+            /* -----------------------------------------
+               CONFIRM PENDING REWARD
+            ----------------------------------------- */
+
+            const result =
                 await confirmAdsgramReward({
 
                     telegramId
@@ -344,30 +491,16 @@ app.get(
                 });
 
 
-            return res.json({
+            /*
+             * IMPORTANT:
+             *
+             * confirmAdsgramReward() already returns
+             * the correct public response object.
+             */
 
-                success: true,
-
-                message:
-                    "AdsGram reward confirmed.",
-
-                reward: {
-
-                    id:
-                        reward.id,
-
-                    adType:
-                        reward.ad_type,
-
-                    status:
-                        reward.status,
-
-                    confirmedAt:
-                        reward.confirmed_at
-
-                }
-
-            });
+            return res.json(
+                result
+            );
 
         } catch (error) {
 
@@ -386,6 +519,9 @@ app.get(
 
                     success: false,
 
+                    code:
+                        "USER_NOT_FOUND",
+
                     message:
                         "Telegram user not found."
 
@@ -402,6 +538,9 @@ app.get(
                 return res.status(409).json({
 
                     success: false,
+
+                    code:
+                        "NO_PENDING_AD",
 
                     message:
                         "No pending ad reward."
@@ -420,6 +559,9 @@ app.get(
 
                     success: false,
 
+                    code:
+                        "AD_ALREADY_PROCESSED",
+
                     message:
                         "Ad reward was already processed."
 
@@ -437,8 +579,71 @@ app.get(
 
                     success: false,
 
+                    code:
+                        "INVALID_AD_TYPE",
+
                     message:
                         "Invalid stored ad type."
+
+                });
+
+            }
+
+
+            if (
+                error.code ===
+                "INVALID_GAME_SESSION"
+            ) {
+
+                return res.status(500).json({
+
+                    success: false,
+
+                    code:
+                        "INVALID_GAME_SESSION",
+
+                    message:
+                        "Invalid stored game session."
+
+                });
+
+            }
+
+
+            if (
+                error.code ===
+                "GAME_SESSION_NOT_FOUND"
+            ) {
+
+                return res.status(404).json({
+
+                    success: false,
+
+                    code:
+                        "GAME_SESSION_NOT_FOUND",
+
+                    message:
+                        "Game session not found."
+
+                });
+
+            }
+
+
+            if (
+                error.code ===
+                "GAME_NOT_COMPLETED"
+            ) {
+
+                return res.status(409).json({
+
+                    success: false,
+
+                    code:
+                        "GAME_NOT_COMPLETED",
+
+                    message:
+                        "Game is not completed."
 
                 });
 
@@ -448,6 +653,9 @@ app.get(
             return res.status(500).json({
 
                 success: false,
+
+                code:
+                    "AD_REWARD_ERROR",
 
                 message:
                     "Unable to process ad reward."
@@ -462,20 +670,6 @@ app.get(
 
 /* =========================================================
    AUTHENTICATION ROUTES
-=========================================================
-
-   /api/auth/telegram
-
-   remains PUBLIC because the user does not have a
-   backend session yet.
-
-   Telegram initData is verified inside authRouter.
-
-   /api/auth/me
-   /api/auth/logout
-
-   already use requireAuth inside authRouter.
-
 ========================================================= */
 
 app.use(
@@ -486,7 +680,7 @@ app.use(
 
 
 /* =========================================================
-   PROTECTED GAME ROUTES
+   GAME ROUTES
 ========================================================= */
 
 app.use(
@@ -499,12 +693,14 @@ app.use(
 
 
 /* =========================================================
-   PROTECTED REWARD ROUTES
+   REWARD ROUTES
 =========================================================
 
-   rewardsRouter already uses requireAuth internally.
+rewardsRouter already contains:
 
-   We intentionally do NOT add requireAuth here again.
+router.use(requireAuth)
+
+Therefore do NOT add requireAuth here again.
 
 ========================================================= */
 
@@ -515,7 +711,7 @@ app.use(
 
 
 /* =========================================================
-   PROTECTED LEADERBOARD ROUTES
+   LEADERBOARD ROUTES
 ========================================================= */
 
 app.use(
@@ -528,7 +724,7 @@ app.use(
 
 
 /* =========================================================
-   PROTECTED REFERRAL ROUTES
+   REFERRAL ROUTES
 ========================================================= */
 
 app.use(
@@ -541,7 +737,7 @@ app.use(
 
 
 /* =========================================================
-   PROTECTED WITHDRAWAL ROUTES
+   WITHDRAWAL ROUTES
 ========================================================= */
 
 app.use(
@@ -560,9 +756,12 @@ app.use(
 app.use(
     (req, res) => {
 
-        res.status(404).json({
+        return res.status(404).json({
 
             success: false,
+
+            code:
+                "NOT_FOUND",
 
             message:
                 "Route not found."
@@ -604,9 +803,15 @@ app.use(
             Number(error.status) || 500;
 
 
-        res.status(status).json({
+        return res.status(
+            status
+        ).json({
 
             success: false,
+
+            code:
+                error.code ||
+                "INTERNAL_SERVER_ERROR",
 
             message:
                 NODE_ENV === "production"
@@ -656,15 +861,22 @@ const server =
             );
 
             console.log(
+                `Frontend URL: ${
+                    FRONTEND_URL ||
+                    "ALLOW ALL"
+                }`
+            );
+
+            console.log(
                 "Authentication: ENABLED"
             );
 
             console.log(
-                "Protected routes: ENABLED"
+                "Game API: AUTH REQUIRED"
             );
 
             console.log(
-                "Game API: AUTH REQUIRED"
+                "Rewards API: AUTH REQUIRED"
             );
 
             console.log(
@@ -680,10 +892,6 @@ const server =
             );
 
             console.log(
-                "Rewards API: AUTH REQUIRED"
-            );
-
-            console.log(
                 "AdsGram callback: PUBLIC"
             );
 
@@ -692,16 +900,19 @@ const server =
             );
 
             console.log(
-                "Referral API: /api/referrals"
+                "Health: /health"
             );
 
             console.log(
-                "AdsGram Reward URL: /api/adsgram/reward"
+                "AdsGram Reward URL:"
+            );
+
+            console.log(
+                "/api/adsgram/reward"
             );
 
             console.log(
                 "=========================================="
-
             );
 
         }
