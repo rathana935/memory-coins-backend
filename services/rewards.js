@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import pool from "../db/pool.js";
 
 
@@ -8,7 +7,7 @@ import pool from "../db/pool.js";
 
 const ADSGRAM_BLOCK_ID =
     String(
-        process.env.ADSGRAM_BLOCK_ID || "48045"
+        process.env.ADSGRAM_BLOCK_ID || "48148"
     );
 
 const ADSGRAM_PENDING_MAX_SECONDS =
@@ -25,7 +24,7 @@ const AD_TYPES = [
 
 
 /* =========================================================
-   HELPERS
+   ERROR HELPER
 ========================================================= */
 
 function createError(
@@ -37,6 +36,10 @@ function createError(
     return error;
 }
 
+
+/* =========================================================
+   USER HELPERS
+========================================================= */
 
 async function getUserById(
     client,
@@ -54,7 +57,6 @@ async function getUserById(
             [userId]
         );
 
-
     if (!result.rows[0]) {
 
         throw createError(
@@ -63,7 +65,6 @@ async function getUserById(
         );
 
     }
-
 
     return result.rows[0];
 }
@@ -85,7 +86,6 @@ async function getUserByTelegramId(
             [telegramId]
         );
 
-
     if (!result.rows[0]) {
 
         throw createError(
@@ -94,7 +94,6 @@ async function getUserByTelegramId(
         );
 
     }
-
 
     return result.rows[0];
 }
@@ -106,20 +105,21 @@ async function getUserByTelegramId(
 
 POST /api/rewards/ad-intent
 
-Allowed:
+Life:
 
 {
     "adType": "life"
 }
 
-OR:
+Double reward:
 
 {
     "adType": "double_reward",
     "gameSessionId": "UUID"
 }
 
-The client cannot specify the reward amount.
+The client NEVER supplies the reward amount.
+
 ========================================================= */
 
 export async function createAdRewardIntent({
@@ -170,6 +170,10 @@ export async function createAdRewardIntent({
         await client.query("BEGIN");
 
 
+        /* -----------------------------------------
+           LOCK USER
+        ----------------------------------------- */
+
         const user =
             await getUserById(
                 client,
@@ -177,14 +181,65 @@ export async function createAdRewardIntent({
             );
 
 
+        /* -----------------------------------------
+           ONLY ONE PENDING ADSGRAM INTENT
+           PER USER
+           
+           The AdsGram Reward URL identifies the
+           user, so allowing multiple pending ads
+           could cause the callback to confirm the
+           wrong intent.
+        ----------------------------------------- */
+
+        const pendingResult =
+            await client.query(
+                `
+                SELECT id
+                FROM ad_rewards
+                WHERE user_id = $1
+                  AND provider = 'adsgram'
+                  AND status = 'pending'
+                  AND created_at >=
+                      NOW() -
+                      ($2 * INTERVAL '1 second')
+                LIMIT 1
+                FOR UPDATE
+                `,
+                [
+                    userId,
+                    ADSGRAM_PENDING_MAX_SECONDS
+                ]
+            );
+
+
+        if (pendingResult.rows[0]) {
+
+            throw createError(
+                "An AdsGram reward is already pending.",
+                "AD_ALREADY_PENDING"
+            );
+
+        }
+
+
+        /* -----------------------------------------
+           DOUBLE REWARD VALIDATION
+        ----------------------------------------- */
+
         if (
             adType === "double_reward"
         ) {
 
-            const game =
+            const gameResult =
                 await client.query(
                     `
-                    SELECT *
+                    SELECT
+                        id,
+                        user_id,
+                        difficulty,
+                        level,
+                        reward,
+                        completed_at
                     FROM game_sessions
                     WHERE id = $1
                       AND user_id = $2
@@ -197,7 +252,7 @@ export async function createAdRewardIntent({
                 );
 
 
-            if (!game.rows[0]) {
+            if (!gameResult.rows[0]) {
 
                 throw createError(
                     "Game session not found.",
@@ -207,9 +262,18 @@ export async function createAdRewardIntent({
             }
 
 
-            if (
-                game.rows[0].status !== "completed"
-            ) {
+            const game =
+                gameResult.rows[0];
+
+
+            /*
+             * IMPORTANT:
+             *
+             * game_sessions uses completed_at.
+             * It does NOT use status='completed'.
+             */
+
+            if (!game.completed_at) {
 
                 throw createError(
                     "Game must be completed first.",
@@ -219,10 +283,9 @@ export async function createAdRewardIntent({
             }
 
 
-            /*
-             * Only one pending/confirmed double reward
-             * may exist for a game session.
-             */
+            /* -------------------------------------
+               PREVENT SECOND DOUBLE REWARD
+            ------------------------------------- */
 
             const existing =
                 await client.query(
@@ -258,47 +321,37 @@ export async function createAdRewardIntent({
         }
 
 
-        /*
-         * For a life ad, do not create another intent
-         * while the user already has a pending life ad.
-         */
+        /* -----------------------------------------
+           LIFE AD
+        ----------------------------------------- */
 
         if (
             adType === "life"
         ) {
 
-            const existing =
-                await client.query(
-                    `
-                    SELECT id
-                    FROM ad_rewards
-                    WHERE user_id = $1
-                      AND provider = 'adsgram'
-                      AND ad_type = 'life'
-                      AND status = 'pending'
-                      AND created_at >=
-                          NOW() -
-                          ($2 * INTERVAL '1 second')
-                    LIMIT 1
-                    `,
-                    [
-                        userId,
-                        ADSGRAM_PENDING_MAX_SECONDS
-                    ]
-                );
+            /*
+             * Do not waste an ad when lives are
+             * already full.
+             */
 
-
-            if (existing.rows[0]) {
+            if (
+                Number(user.lives) >=
+                MAX_LIVES
+            ) {
 
                 throw createError(
-                    "A life ad is already pending.",
-                    "ALREADY_CLAIMED"
+                    "Lives are already full.",
+                    "MAX_LIVES"
                 );
 
             }
 
         }
 
+
+        /* -----------------------------------------
+           METADATA
+        ----------------------------------------- */
 
         const metadata = {
 
@@ -308,10 +361,9 @@ export async function createAdRewardIntent({
         };
 
 
-        /*
-         * reward_coins is zero for the life reward.
-         * Double reward uses the game reward later.
-         */
+        /* -----------------------------------------
+           INSERT PENDING REWARD
+        ----------------------------------------- */
 
         const inserted =
             await client.query(
@@ -367,12 +419,13 @@ export async function createAdRewardIntent({
    CLAIM +1 LIFE
 =========================================================
 
-This consumes a confirmed AdsGram "life" reward.
+POST /api/rewards/life
 
-The client cannot tell the server how many lives to add.
-The server always adds exactly ONE.
+The AdsGram callback ONLY confirms the reward.
 
-Maximum = 5.
+This endpoint consumes the confirmed reward and gives
+exactly +1 life.
+
 ========================================================= */
 
 export async function claimAdLife(
@@ -405,7 +458,14 @@ export async function claimAdLife(
             );
 
 
-        if (user.lives >= MAX_LIVES) {
+        /* -----------------------------------------
+           CHECK MAX LIVES
+        ----------------------------------------- */
+
+        if (
+            Number(user.lives) >=
+            MAX_LIVES
+        ) {
 
             throw createError(
                 "Lives are already full.",
@@ -415,10 +475,9 @@ export async function claimAdLife(
         }
 
 
-        /*
-         * Find the newest confirmed life reward that
-         * has not yet been consumed.
-         */
+        /* -----------------------------------------
+           FIND CONFIRMED LIFE REWARD
+        ----------------------------------------- */
 
         const rewardResult =
             await client.query(
@@ -452,41 +511,68 @@ export async function claimAdLife(
             rewardResult.rows[0];
 
 
-        /*
-         * Add exactly ONE life.
-         */
+        /* -----------------------------------------
+           ADD EXACTLY ONE LIFE
+        ----------------------------------------- */
 
         const updatedUser =
             await client.query(
                 `
                 UPDATE users
                 SET
-                    lives = LEAST(lives + 1, $2),
+                    lives = LEAST(
+                        lives + $2,
+                        $3
+                    ),
                     updated_at = NOW()
                 WHERE id = $1
-                RETURNING *
+                RETURNING lives
                 `,
                 [
                     userId,
+                    LIFE_REWARD,
                     MAX_LIVES
                 ]
             );
 
 
-        /*
-         * Mark the reward consumed.
-         */
+        if (!updatedUser.rows[0]) {
 
-        await client.query(
-            `
-            UPDATE ad_rewards
-            SET
-                consumed_at = NOW()
-            WHERE id = $1
-              AND consumed_at IS NULL
-            `,
-            [reward.id]
-        );
+            throw createError(
+                "Unable to update lives.",
+                "USER_UPDATE_FAILED"
+            );
+
+        }
+
+
+        /* -----------------------------------------
+           CONSUME ADSGRAM REWARD
+        ----------------------------------------- */
+
+        const consumed =
+            await client.query(
+                `
+                UPDATE ad_rewards
+                SET
+                    consumed_at = NOW()
+                WHERE id = $1
+                  AND status = 'confirmed'
+                  AND consumed_at IS NULL
+                RETURNING id
+                `,
+                [reward.id]
+            );
+
+
+        if (!consumed.rows[0]) {
+
+            throw createError(
+                "Ad reward was already consumed.",
+                "AD_ALREADY_CONSUMED"
+            );
+
+        }
 
 
         await client.query("COMMIT");
@@ -498,10 +584,13 @@ export async function claimAdLife(
 
             reward: "life",
 
-            addedLives: 1,
+            addedLives:
+                LIFE_REWARD,
 
             lives:
-                updatedUser.rows[0].lives,
+                Number(
+                    updatedUser.rows[0].lives
+                ),
 
             maxLives:
                 MAX_LIVES
@@ -526,17 +615,18 @@ export async function claimAdLife(
    ADSGRAM CALLBACK
 =========================================================
 
-AdsGram calls:
-
 GET /api/adsgram/reward?userid=[userId]
 
-The callback confirms the newest pending intent.
+The callback:
 
-For "life", the actual +1 life is then immediately
-applied server-side.
+1. Finds the user's pending AdsGram intent.
+2. Confirms it.
+3. Does NOT directly give the life.
+4. The authenticated /life endpoint consumes it.
 
-For "double_reward", confirmation is kept until the
-game reward endpoint consumes it.
+For double_reward, the reward remains confirmed until
+the exact game session consumes it.
+
 ========================================================= */
 
 export async function confirmAdsgramReward({
@@ -568,6 +658,10 @@ export async function confirmAdsgramReward({
                 telegramId
             );
 
+
+        /* -----------------------------------------
+           FIND PENDING ADSGRAM INTENT
+        ----------------------------------------- */
 
         const pending =
             await client.query(
@@ -621,13 +715,17 @@ export async function confirmAdsgramReward({
         }
 
 
+        /* -----------------------------------------
+           INTERNAL REWARD ID
+        ----------------------------------------- */
+
         const externalRewardId =
             `adsgram:${ADSGRAM_BLOCK_ID}:${reward.id}`;
 
 
-        /*
-         * Confirm exactly once.
-         */
+        /* -----------------------------------------
+           CONFIRM EXACTLY ONCE
+        ----------------------------------------- */
 
         const updated =
             await client.query(
@@ -658,119 +756,49 @@ export async function confirmAdsgramReward({
         }
 
 
-        /*
-         * LIFE REWARD
-         *
-         * AdsGram callback itself grants the life.
-         * No second client claim is required.
-         */
-
-        if (
-            adType === "life"
-        ) {
-
-            if (user.lives >= MAX_LIVES) {
-
-                /*
-                 * Keep the confirmed reward available.
-                 * The user can consume it later if they
-                 * have room for a life.
-                 */
-
-                await client.query("COMMIT");
-
-                return {
-
-                    success: true,
-
-                    reward: updated.rows[0],
-
-                    rewardType: "life",
-
-                    addedLives: 0,
-
-                    lives: user.lives,
-
-                    maxLives: MAX_LIVES,
-
-                    message:
-                        "Ad confirmed. Lives are already full."
-
-                };
-
-            }
-
-
-            const updatedUser =
-                await client.query(
-                    `
-                    UPDATE users
-                    SET
-                        lives = LEAST(lives + 1, $2),
-                        updated_at = NOW()
-                    WHERE id = $1
-                    RETURNING lives
-                    `,
-                    [
-                        user.id,
-                        MAX_LIVES
-                    ]
-                );
-
-
-            await client.query(
-                `
-                UPDATE ad_rewards
-                SET
-                    consumed_at = NOW()
-                WHERE id = $1
-                  AND consumed_at IS NULL
-                `,
-                [reward.id]
-            );
-
-
-            await client.query("COMMIT");
-
-
-            return {
-
-                success: true,
-
-                reward: updated.rows[0],
-
-                rewardType: "life",
-
-                addedLives: 1,
-
-                lives:
-                    updatedUser.rows[0].lives,
-
-                maxLives:
-                    MAX_LIVES
-
-            };
-
-        }
-
-
-        /*
-         * DOUBLE REWARD
-         *
-         * Confirmation is enough here.
-         * The game reward endpoint will consume it.
-         */
-
         await client.query("COMMIT");
 
+
+        /* -----------------------------------------
+           IMPORTANT
+           
+           No coins or lives are added here.
+           
+           The authenticated client must consume
+           the confirmed reward through:
+           
+           /api/rewards/life
+           
+           or:
+           
+           /api/rewards/double-game-reward
+        ----------------------------------------- */
 
         return {
 
             success: true,
 
-            reward: updated.rows[0],
+            reward: {
 
-            rewardType: adType
+                id:
+                    updated.rows[0].id,
+
+                adType:
+                    updated.rows[0].ad_type,
+
+                status:
+                    updated.rows[0].status,
+
+                confirmedAt:
+                    updated.rows[0].confirmed_at
+
+            },
+
+            rewardType:
+                adType,
+
+            message:
+                "AdsGram reward confirmed."
 
         };
 
@@ -796,6 +824,16 @@ export async function claimDailyBonus(
     userId
 ) {
 
+    if (!userId) {
+
+        throw createError(
+            "User ID is required.",
+            "INVALID_USER_ID"
+        );
+
+    }
+
+
     const client =
         await pool.connect();
 
@@ -820,8 +858,9 @@ export async function claimDailyBonus(
 
         if (
             user.last_daily_claim &&
-            String(user.last_daily_claim)
-                .slice(0, 10) === today
+            String(
+                user.last_daily_claim
+            ).slice(0, 10) === today
         ) {
 
             throw createError(
@@ -834,6 +873,10 @@ export async function claimDailyBonus(
 
         const rewardCoins = 100;
 
+
+        /* -----------------------------------------
+           CREATE DAILY CLAIM
+        ----------------------------------------- */
 
         const claim =
             await client.query(
@@ -886,12 +929,17 @@ export async function claimDailyBonus(
             before + rewardCoins;
 
 
+        /* -----------------------------------------
+           UPDATE USER
+        ----------------------------------------- */
+
         await client.query(
             `
             UPDATE users
             SET
                 coins = $2,
-                today_coins = today_coins + $3,
+                today_coins =
+                    today_coins + $3,
                 last_daily_claim = $4,
                 updated_at = NOW()
             WHERE id = $1
@@ -904,6 +952,10 @@ export async function claimDailyBonus(
             ]
         );
 
+
+        /* -----------------------------------------
+           TRANSACTION LOG
+        ----------------------------------------- */
 
         await client.query(
             `
@@ -947,7 +999,8 @@ export async function claimDailyBonus(
 
             rewardCoins,
 
-            coins: after
+            coins:
+                after
 
         };
 
@@ -967,12 +1020,41 @@ export async function claimDailyBonus(
 
 /* =========================================================
    DOUBLE GAME REWARD
+=========================================================
+
+The player receives the ORIGINAL game reward one more time.
+
+Example:
+
+Game reward = 10 coins
+
+Normal completion:
++10
+
+AdsGram double reward:
++10
+
+Total earned from that game:
+20
+
+The client cannot specify the amount.
+
 ========================================================= */
 
 export async function claimDoubleGameReward(
     userId,
     gameSessionId
 ) {
+
+    if (!userId) {
+
+        throw createError(
+            "User ID is required.",
+            "INVALID_USER_ID"
+        );
+
+    }
+
 
     if (!gameSessionId) {
 
@@ -1000,10 +1082,20 @@ export async function claimDoubleGameReward(
             );
 
 
+        /* -----------------------------------------
+           GET EXACT GAME SESSION
+        ----------------------------------------- */
+
         const gameResult =
             await client.query(
                 `
-                SELECT *
+                SELECT
+                    id,
+                    user_id,
+                    difficulty,
+                    level,
+                    reward,
+                    completed_at
                 FROM game_sessions
                 WHERE id = $1
                   AND user_id = $2
@@ -1030,9 +1122,14 @@ export async function claimDoubleGameReward(
             gameResult.rows[0];
 
 
-        if (
-            game.status !== "completed"
-        ) {
+        /* -----------------------------------------
+           IMPORTANT:
+           
+           game_sessions uses completed_at,
+           NOT status.
+        ----------------------------------------- */
+
+        if (!game.completed_at) {
 
             throw createError(
                 "Game is not completed.",
@@ -1042,10 +1139,10 @@ export async function claimDoubleGameReward(
         }
 
 
-        /*
-         * Find the confirmed double-reward ad
-         * for this exact game.
-         */
+        /* -----------------------------------------
+           FIND CONFIRMED ADSGRAM REWARD
+           FOR THIS EXACT GAME
+        ----------------------------------------- */
 
         const rewardResult =
             await client.query(
@@ -1083,10 +1180,9 @@ export async function claimDoubleGameReward(
             rewardResult.rows[0];
 
 
-        /*
-         * Make sure this game has not already been
-         * doubled.
-         */
+        /* -----------------------------------------
+           PREVENT DOUBLE CLAIM
+        ----------------------------------------- */
 
         const previous =
             await client.query(
@@ -1115,8 +1211,17 @@ export async function claimDoubleGameReward(
         }
 
 
+        /* -----------------------------------------
+           USE SERVER GAME REWARD
+           
+           IMPORTANT:
+           game_sessions column = reward
+           
+           NOT reward_coins.
+        ----------------------------------------- */
+
         const baseReward =
-            Number(game.reward_coins);
+            Number(game.reward);
 
 
         if (
@@ -1136,30 +1241,44 @@ export async function claimDoubleGameReward(
             Number(user.coins);
 
 
-        const doubleReward =
+        /*
+         * Double reward means adding the same
+         * original reward one more time.
+         */
+
+        const bonusReward =
             baseReward;
 
 
         const after =
-            before + doubleReward;
+            before + bonusReward;
 
+
+        /* -----------------------------------------
+           UPDATE COINS
+        ----------------------------------------- */
 
         await client.query(
             `
             UPDATE users
             SET
                 coins = $2,
-                today_coins = today_coins + $3,
+                today_coins =
+                    today_coins + $3,
                 updated_at = NOW()
             WHERE id = $1
             `,
             [
                 userId,
                 after,
-                doubleReward
+                bonusReward
             ]
         );
 
+
+        /* -----------------------------------------
+           TRANSACTION LOG
+        ----------------------------------------- */
 
         await client.query(
             `
@@ -1186,7 +1305,7 @@ export async function claimDoubleGameReward(
             `,
             [
                 userId,
-                doubleReward,
+                bonusReward,
                 before,
                 after,
                 gameSessionId
@@ -1194,16 +1313,33 @@ export async function claimDoubleGameReward(
         );
 
 
-        await client.query(
-            `
-            UPDATE ad_rewards
-            SET
-                consumed_at = NOW()
-            WHERE id = $1
-              AND consumed_at IS NULL
-            `,
-            [adReward.id]
-        );
+        /* -----------------------------------------
+           CONSUME ADSGRAM REWARD
+        ----------------------------------------- */
+
+        const consumed =
+            await client.query(
+                `
+                UPDATE ad_rewards
+                SET
+                    consumed_at = NOW()
+                WHERE id = $1
+                  AND status = 'confirmed'
+                  AND consumed_at IS NULL
+                RETURNING id
+                `,
+                [adReward.id]
+            );
+
+
+        if (!consumed.rows[0]) {
+
+            throw createError(
+                "Ad reward was already consumed.",
+                "AD_ALREADY_CONSUMED"
+            );
+
+        }
 
 
         await client.query("COMMIT");
@@ -1217,13 +1353,13 @@ export async function claimDoubleGameReward(
 
             baseReward,
 
-            bonusReward:
-                doubleReward,
+            bonusReward,
 
             totalFromAd:
-                doubleReward,
+                bonusReward,
 
-            coins: after
+            coins:
+                after
 
         };
 
@@ -1249,6 +1385,16 @@ export async function getRewardStatus(
     userId
 ) {
 
+    if (!userId) {
+
+        throw createError(
+            "User ID is required.",
+            "INVALID_USER_ID"
+        );
+
+    }
+
+
     const client =
         await pool.connect();
 
@@ -1262,7 +1408,7 @@ export async function getRewardStatus(
             );
 
 
-        const pending =
+        const rewards =
             await client.query(
                 `
                 SELECT
@@ -1290,13 +1436,13 @@ export async function getRewardStatus(
         return {
 
             lives:
-                user.lives,
+                Number(user.lives),
 
             maxLives:
                 MAX_LIVES,
 
             pendingAds:
-                pending.rows
+                rewards.rows
 
         };
 
