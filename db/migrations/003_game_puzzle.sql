@@ -10,17 +10,13 @@
 BEGIN;
 
 
-/* ============================================================
-   1. ADD SERVER PUZZLE STORAGE
-============================================================ */
+/* ============================================================ 1. ADD SERVER PUZZLE STORAGE ============================================================ */
 
 ALTER TABLE game_sessions
 ADD COLUMN IF NOT EXISTS puzzle_deck JSONB;
 
 
-/* ============================================================
-   2. ADD PUZZLE VERSION
-============================================================ */
+/* ============================================================ 2. ADD PUZZLE VERSION ============================================================ */
 
 ALTER TABLE game_sessions
 ADD COLUMN IF NOT EXISTS puzzle_version INTEGER
@@ -28,9 +24,7 @@ NOT NULL
 DEFAULT 1;
 
 
-/* ============================================================
-   3. PUZZLE VERSION VALIDATION
-============================================================ */
+/* ============================================================ 3. PUZZLE VERSION VALIDATION ============================================================ */
 
 DO $$
 BEGIN
@@ -52,28 +46,14 @@ END
 $$;
 
 
-/* ============================================================
-   4. PUZZLE VERSION INDEX
-============================================================ */
+/* ============================================================ 4. PUZZLE VERSION INDEX ============================================================ */
 
 CREATE INDEX IF NOT EXISTS
 idx_game_sessions_puzzle_version
 ON game_sessions(puzzle_version);
 
 
-/* ============================================================
-   5. COMPLETION TOKEN
-============================================================
-
-   New game.js creates a 64-character hexadecimal token:
-
-   crypto.randomBytes(32).toString("hex")
-
-   Therefore completion_token must support strings,
-   not only UUID values.
-
-   We only change the column type if necessary.
-============================================================ */
+/* ============================================================ 5. COMPLETION TOKEN ============================================================ New game.js creates a 64-character hexadecimal token: crypto.randomBytes(32).toString("hex") Therefore completion_token must support strings, not only UUID values. We only change the column type if necessary. ============================================================ */
 
 DO $$
 DECLARE
@@ -100,9 +80,7 @@ END
 $$;
 
 
-/* ============================================================
-   6. ENSURE COMPLETION TOKEN IS NOT NULL
-============================================================ */
+/* ============================================================ 6. ENSURE COMPLETION TOKEN IS NOT NULL ============================================================ */
 
 UPDATE game_sessions
 SET completion_token =
@@ -113,9 +91,7 @@ SET completion_token =
 WHERE completion_token IS NULL;
 
 
-/* ============================================================
-   7. COMPLETION TOKEN DEFAULT
-============================================================ */
+/* ============================================================ 7. COMPLETION TOKEN DEFAULT ============================================================ */
 
 ALTER TABLE game_sessions
 ALTER COLUMN completion_token
@@ -125,26 +101,20 @@ SET DEFAULT encode(
 );
 
 
-/* ============================================================
-   8. COMPLETION TOKEN NOT NULL
-============================================================ */
+/* ============================================================ 8. COMPLETION TOKEN NOT NULL ============================================================ */
 
 ALTER TABLE game_sessions
 ALTER COLUMN completion_token
 SET NOT NULL;
 
 
-/* ============================================================
-   9. COMPLETION TOKEN UNIQUE INDEX
-============================================================ */
+/* ============================================================ 9. COMPLETION TOKEN UNIQUE INDEX ============================================================ */
 
 CREATE UNIQUE INDEX IF NOT EXISTS
 idx_game_completion_token
 ON game_sessions(completion_token);
 
 
-/* ============================================================
-   FINISH
-============================================================ */
+/* ============================================================ FINISH ============================================================ */
 
 COMMIT;
