@@ -33,15 +33,164 @@ const MAX_MATCHED_INDEXES = 36;
    HELPERS
 ========================================================= */
 
+/*
+ * Get authenticated user ID.
+ *
+ * IMPORTANT:
+ * We only read this from server-side authentication data.
+ * We do NOT trust req.body.userId.
+ */
 function getUserId(req) {
     return (
-        req.user?.id ||
-        req.user?.user_id ||
-        req.user?.userId ||
-        req.user?.telegram_id ||
-        req.user?.telegramId ||
+        req.user?.id ??
+        req.user?.user_id ??
+        req.user?.userId ??
+        req.user?.telegram_id ??
+        req.user?.telegramId ??
+        req.auth?.id ??
+        req.auth?.user_id ??
+        req.auth?.userId ??
+        req.auth?.telegram_id ??
+        req.auth?.telegramId ??
+        req.userId ??
         null
     );
+}
+
+/*
+ * Normalize difficulty.
+ *
+ * This allows the frontend to send:
+ *
+ * easy
+ * easy_mode
+ * easy mode
+ * hard
+ * medium
+ * hard_mode
+ * medium_mode
+ * difficult
+ * difficult_mode
+ * expert
+ *
+ * Internally we always use:
+ *
+ * easy
+ * hard
+ * difficult
+ */
+function normalizeDifficulty(value) {
+    if (
+        value === undefined ||
+        value === null
+    ) {
+        return "";
+    }
+
+    const normalized =
+        String(value)
+            .trim()
+            .toLowerCase();
+
+    const aliases = {
+        easy: "easy",
+        "easy mode": "easy",
+        easy_mode: "easy",
+        beginner: "easy",
+
+        hard: "hard",
+        medium: "hard",
+        normal: "hard",
+        "hard mode": "hard",
+        "medium mode": "hard",
+        hard_mode: "hard",
+        medium_mode: "hard",
+
+        difficult: "difficult",
+        "difficult mode": "difficult",
+        difficult_mode: "difficult",
+        expert: "difficult",
+        extreme: "difficult",
+    };
+
+    return (
+        aliases[normalized] ||
+        normalized
+    );
+}
+
+/*
+ * Extract difficulty from several possible
+ * frontend request formats.
+ *
+ * Supported examples:
+ *
+ * {
+ *   "difficulty": "easy"
+ * }
+ *
+ * {
+ *   "mode": "easy"
+ * }
+ *
+ * {
+ *   "gameDifficulty": "easy"
+ * }
+ *
+ * {
+ *   "game": {
+ *      "difficulty": "easy"
+ *   }
+ * }
+ */
+function getDifficulty(req) {
+    const body =
+        req.body || {};
+
+    return (
+        body.difficulty ??
+        body.gameDifficulty ??
+        body.mode ??
+        body.gameMode ??
+        body.game?.difficulty ??
+        body.game?.mode ??
+        ""
+    );
+}
+
+/*
+ * Extract level if frontend sends one.
+ *
+ * The game service should still verify the
+ * user's actual unlocked level server-side.
+ */
+function getLevel(req) {
+    const body =
+        req.body || {};
+
+    const value =
+        body.level ??
+        body.gameLevel ??
+        body.game?.level;
+
+    if (
+        value === undefined ||
+        value === null ||
+        value === ""
+    ) {
+        return undefined;
+    }
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isInteger(number)
+    ) {
+        return undefined;
+    }
+
+    return number;
 }
 
 function isValidUUID(value) {
@@ -76,6 +225,13 @@ router.get(
         try {
             const userId =
                 getUserId(req);
+
+            console.log(
+                "GAME STATUS:",
+                {
+                    userId,
+                }
+            );
 
             if (!userId) {
                 return sendError(
@@ -133,6 +289,32 @@ router.post(
             const userId =
                 getUserId(req);
 
+            const receivedDifficulty =
+                getDifficulty(req);
+
+            const difficulty =
+                normalizeDifficulty(
+                    receivedDifficulty
+                );
+
+            const level =
+                getLevel(req);
+
+            console.log(
+                "START GAME:",
+                {
+                    receivedDifficulty,
+                    normalizedDifficulty:
+                        difficulty,
+                    level,
+                    userId,
+                }
+            );
+
+            /* -------------------------------------------------
+               AUTHENTICATION
+            ------------------------------------------------- */
+
             if (!userId) {
                 return sendError(
                     res,
@@ -142,12 +324,8 @@ router.post(
                 );
             }
 
-            const {
-                difficulty,
-            } = req.body || {};
-
             /* -------------------------------------------------
-               VALIDATE DIFFICULTY
+               DIFFICULTY
             ------------------------------------------------- */
 
             if (
@@ -164,13 +342,37 @@ router.post(
             }
 
             /* -------------------------------------------------
+               OPTIONAL LEVEL VALIDATION
+            ------------------------------------------------- */
+
+            if (
+                level !== undefined &&
+                (
+                    level < 1 ||
+                    level > 100
+                )
+            ) {
+                return sendError(
+                    res,
+                    400,
+                    "INVALID_GAME_LEVEL",
+                    "Level must be between 1 and 100."
+                );
+            }
+
+            /* -------------------------------------------------
                START GAME
+               
+               Pass level as a third argument.
+               If the service only accepts two arguments,
+               JavaScript simply ignores the extra argument.
             ------------------------------------------------- */
 
             const result =
                 await startGame(
                     userId,
-                    difficulty
+                    difficulty,
+                    level
                 );
 
             return res.json({
@@ -196,10 +398,11 @@ router.post(
                     );
 
                 case "INVALID_GAME_DIFFICULTY":
+                case "INVALID_DIFFICULTY":
                     return sendError(
                         res,
                         400,
-                        code,
+                        "INVALID_GAME_DIFFICULTY",
                         "Invalid difficulty. Use easy, hard, or difficult."
                     );
 
@@ -233,6 +436,14 @@ router.post(
                         400,
                         code,
                         "Invalid current level."
+                    );
+
+                case "INVALID_GAME_LEVEL":
+                    return sendError(
+                        res,
+                        400,
+                        code,
+                        "Invalid game level."
                     );
 
                 case "INVALID_PAIR_COUNT":
@@ -275,16 +486,28 @@ router.post(
                 );
             }
 
+            const body =
+                req.body || {};
+
             const {
                 gameId,
                 completionToken,
-                difficulty,
                 moves,
                 duration,
                 durationSeconds,
                 matchedPairs,
                 matchedIndexes,
-            } = req.body || {};
+            } = body;
+
+            const difficulty =
+                normalizeDifficulty(
+                    body.difficulty ??
+                    body.gameDifficulty ??
+                    body.mode ??
+                    body.gameMode ??
+                    body.game?.difficulty ??
+                    body.game?.mode
+                );
 
             /* -------------------------------------------------
                GAME ID
@@ -362,10 +585,6 @@ router.post(
 
             /* -------------------------------------------------
                DURATION
-               
-               Support:
-                 duration
-                 durationSeconds
             ------------------------------------------------- */
 
             const finalDuration =
@@ -452,17 +671,10 @@ router.post(
             }
 
             /* -------------------------------------------------
-               SECURITY
+               COMPLETE GAME
                
-               Never accept these from
-               the frontend:
-
-                 reward
-                 coins
-                 multiplier
-                 doubleReward
-                 adReward
-                 bonus
+               Reward/coins are NEVER accepted
+               from the frontend.
             ------------------------------------------------- */
 
             const result =
@@ -519,10 +731,11 @@ router.post(
                     );
 
                 case "INVALID_GAME_DIFFICULTY":
+                case "INVALID_DIFFICULTY":
                     return sendError(
                         res,
                         400,
-                        code,
+                        "INVALID_GAME_DIFFICULTY",
                         "Invalid difficulty. Use easy, hard, or difficult."
                     );
 
