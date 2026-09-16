@@ -8,6 +8,23 @@ import pool from "../db/pool.js";
 const MAX_LIVES = 5;
 const LIFE_REGEN_SECONDS = 60 * 60; // 1 hour
 const SESSION_SECONDS = 15 * 60;    // 15 minutes
+const MAX_LEVEL = 100;
+
+/*
+   IMPORTANT
+
+   Internal game names:
+
+   easy      = 4x4  = 8 pairs  = 10 coins
+   hard      = 4x6  = 12 pairs = 12 coins
+   difficult = 6x6  = 18 pairs = 15 coins
+
+   PostgreSQL users table:
+
+   easy      -> easy_level
+   hard      -> medium_level
+   difficult -> hard_level
+*/
 
 const DIFFICULTIES = {
   easy: {
@@ -23,7 +40,7 @@ const DIFFICULTIES = {
     cols: 6,
     pairs: 12,
     reward: 12,
-    levelColumn: "hard_level"
+    levelColumn: "medium_level"
   },
 
   difficult: {
@@ -31,27 +48,76 @@ const DIFFICULTIES = {
     cols: 6,
     pairs: 18,
     reward: 15,
-    levelColumn: "difficult_level"
+    levelColumn: "hard_level"
   }
 };
 
 /* =========================================================
-   HELPERS
+   DIFFICULTY NORMALIZATION
 ========================================================= */
 
+function normalizeDifficulty(difficulty) {
+  const value = String(difficulty || "")
+    .trim()
+    .toLowerCase();
+
+  /*
+     EASY
+  */
+
+  if (
+    value === "easy" ||
+    value === "beginner"
+  ) {
+    return "easy";
+  }
+
+  /*
+     HARD
+
+     Accept "medium" and "normal" too,
+     because some frontends use those names.
+  */
+
+  if (
+    value === "hard" ||
+    value === "medium" ||
+    value === "normal"
+  ) {
+    return "hard";
+  }
+
+  /*
+     DIFFICULT
+
+     Accept several possible frontend names.
+  */
+
+  if (
+    value === "difficult" ||
+    value === "difficulty" ||
+    value === "expert" ||
+    value === "advanced"
+  ) {
+    return "difficult";
+  }
+
+  return value;
+}
+
 function getDifficultyConfig(difficulty) {
+  const normalized =
+    normalizeDifficulty(difficulty);
+
   return (
-    DIFFICULTIES[
-      String(difficulty || "").toLowerCase()
-    ] || null
+    DIFFICULTIES[normalized] ||
+    null
   );
 }
 
-function normalizeDifficulty(difficulty) {
-  return String(difficulty || "")
-    .trim()
-    .toLowerCase();
-}
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function randomInt(max) {
   return crypto.randomInt(0, max);
@@ -60,10 +126,17 @@ function randomInt(max) {
 function shuffle(array) {
   const result = [...array];
 
-  for (let i = result.length - 1; i > 0; i--) {
+  for (
+    let i = result.length - 1;
+    i > 0;
+    i--
+  ) {
     const j = randomInt(i + 1);
 
-    [result[i], result[j]] = [
+    [
+      result[i],
+      result[j]
+    ] = [
       result[j],
       result[i]
     ];
@@ -75,7 +148,11 @@ function shuffle(array) {
 function createPuzzle(pairs) {
   const deck = [];
 
-  for (let i = 0; i < pairs; i++) {
+  for (
+    let i = 0;
+    i < pairs;
+    i++
+  ) {
     const value = i + 1;
 
     deck.push({
@@ -99,16 +176,29 @@ function hashPuzzle(puzzle) {
     .digest("hex");
 }
 
-function calculateLives(lives, lastLifeAt) {
+/* =========================================================
+   LIVES
+========================================================= */
+
+function calculateLives(
+  lives,
+  lastLifeAt
+) {
   let currentLives = Math.max(
     0,
-    Math.min(MAX_LIVES, Number(lives || 0))
+    Math.min(
+      MAX_LIVES,
+      Number(lives || 0)
+    )
   );
 
-  if (currentLives >= MAX_LIVES) {
+  if (
+    currentLives >= MAX_LIVES
+  ) {
     return {
       lives: MAX_LIVES,
-      lastLifeAt: lastLifeAt || null
+      lastLifeAt:
+        lastLifeAt || null
     };
   }
 
@@ -119,7 +209,8 @@ function calculateLives(lives, lastLifeAt) {
     };
   }
 
-  const last = new Date(lastLifeAt).getTime();
+  const last =
+    new Date(lastLifeAt).getTime();
 
   if (!Number.isFinite(last)) {
     return {
@@ -130,13 +221,16 @@ function calculateLives(lives, lastLifeAt) {
 
   const now = Date.now();
 
-  const elapsedSeconds = Math.floor(
-    (now - last) / 1000
-  );
+  const elapsedSeconds =
+    Math.floor(
+      (now - last) / 1000
+    );
 
-  const recovered = Math.floor(
-    elapsedSeconds / LIFE_REGEN_SECONDS
-  );
+  const recovered =
+    Math.floor(
+      elapsedSeconds /
+        LIFE_REGEN_SECONDS
+    );
 
   if (recovered <= 0) {
     return {
@@ -145,12 +239,15 @@ function calculateLives(lives, lastLifeAt) {
     };
   }
 
-  currentLives = Math.min(
-    MAX_LIVES,
-    currentLives + recovered
-  );
+  currentLives =
+    Math.min(
+      MAX_LIVES,
+      currentLives + recovered
+    );
 
-  if (currentLives >= MAX_LIVES) {
+  if (
+    currentLives >= MAX_LIVES
+  ) {
     return {
       lives: MAX_LIVES,
       lastLifeAt: null
@@ -158,47 +255,68 @@ function calculateLives(lives, lastLifeAt) {
   }
 
   const consumedRecoverySeconds =
-    recovered * LIFE_REGEN_SECONDS;
+    recovered *
+    LIFE_REGEN_SECONDS;
 
-  const newLastLifeAt = new Date(
-    last +
-      consumedRecoverySeconds * 1000
-  );
+  const newLastLifeAt =
+    new Date(
+      last +
+        consumedRecoverySeconds *
+          1000
+    );
 
   return {
     lives: currentLives,
-    lastLifeAt: newLastLifeAt
+    lastLifeAt:
+      newLastLifeAt
   };
 }
 
-function getNextLifeAt(lives, lastLifeAt) {
-  if (Number(lives) >= MAX_LIVES) {
+function getNextLifeAt(
+  lives,
+  lastLifeAt
+) {
+  if (
+    Number(lives) >= MAX_LIVES
+  ) {
     return null;
   }
 
   if (!lastLifeAt) {
     return new Date(
       Date.now() +
-        LIFE_REGEN_SECONDS * 1000
+        LIFE_REGEN_SECONDS *
+          1000
     ).toISOString();
   }
 
   return new Date(
     new Date(lastLifeAt).getTime() +
-      LIFE_REGEN_SECONDS * 1000
+      LIFE_REGEN_SECONDS *
+        1000
   ).toISOString();
 }
+
+/* =========================================================
+   PUZZLE HELPERS
+========================================================= */
 
 function sanitizePuzzle(puzzle) {
   if (!Array.isArray(puzzle)) {
     return [];
   }
 
-  return puzzle.map((card, index) => ({
-    index,
-    id: String(card.id),
-    pairId: Number(card.pairId)
-  }));
+  return puzzle.map(
+    (card, index) => ({
+      index,
+      id: String(
+        card?.id ?? ""
+      ),
+      pairId: Number(
+        card?.pairId
+      )
+    })
+  );
 }
 
 function verifyPuzzleSolution(
@@ -206,11 +324,17 @@ function verifyPuzzleSolution(
   matchedIndexes,
   matchedPairs
 ) {
-  if (!Array.isArray(puzzle)) {
+  if (
+    !Array.isArray(puzzle)
+  ) {
     return false;
   }
 
-  if (!Array.isArray(matchedIndexes)) {
+  if (
+    !Array.isArray(
+      matchedIndexes
+    )
+  ) {
     return false;
   }
 
@@ -224,21 +348,33 @@ function verifyPuzzleSolution(
     return false;
   }
 
-  const indexes = matchedIndexes
-    .map(Number)
-    .filter(Number.isInteger);
+  const indexes =
+    matchedIndexes
+      .map(Number)
+      .filter(
+        Number.isInteger
+      );
 
-  if (indexes.length !== puzzle.length) {
+  if (
+    indexes.length !==
+    puzzle.length
+  ) {
     return false;
   }
 
-  const uniqueIndexes = new Set(indexes);
+  const uniqueIndexes =
+    new Set(indexes);
 
-  if (uniqueIndexes.size !== puzzle.length) {
+  if (
+    uniqueIndexes.size !==
+    puzzle.length
+  ) {
     return false;
   }
 
-  for (const index of indexes) {
+  for (
+    const index of indexes
+  ) {
     if (
       index < 0 ||
       index >= puzzle.length
@@ -247,31 +383,44 @@ function verifyPuzzleSolution(
     }
   }
 
-  const pairCounts = new Map();
+  const pairCounts =
+    new Map();
 
-  for (const index of indexes) {
-    const card = puzzle[index];
+  for (
+    const index of indexes
+  ) {
+    const card =
+      puzzle[index];
 
     if (!card) {
       return false;
     }
 
-    const pairId = Number(card.pairId);
+    const pairId =
+      Number(card.pairId);
 
     pairCounts.set(
       pairId,
-      (pairCounts.get(pairId) || 0) + 1
+      (
+        pairCounts.get(
+          pairId
+        ) || 0
+      ) + 1
     );
   }
 
-  for (const count of pairCounts.values()) {
+  for (
+    const count of
+      pairCounts.values()
+  ) {
     if (count !== 2) {
       return false;
     }
   }
 
   return (
-    pairCounts.size === expectedPairs
+    pairCounts.size ===
+    expectedPairs
   );
 }
 
@@ -284,11 +433,29 @@ export async function startGame({
   difficulty,
   level
 }) {
-  const client = await pool.connect();
+  const client =
+    await pool.connect();
 
   try {
+    /*
+       NORMALIZE DIFFICULTY
+    */
+
     const normalizedDifficulty =
-      normalizeDifficulty(difficulty);
+      normalizeDifficulty(
+        difficulty
+      );
+
+    console.log(
+      "START GAME:",
+      {
+        receivedDifficulty:
+          difficulty,
+        normalizedDifficulty,
+        level,
+        userId
+      }
+    );
 
     const config =
       getDifficultyConfig(
@@ -296,9 +463,10 @@ export async function startGame({
       );
 
     if (!config) {
-      const error = new Error(
-        "Invalid difficulty."
-      );
+      const error =
+        new Error(
+          `Invalid difficulty: ${difficulty}`
+        );
 
       error.code =
         "INVALID_DIFFICULTY";
@@ -306,17 +474,24 @@ export async function startGame({
       throw error;
     }
 
+    /*
+       LEVEL
+    */
+
     const requestedLevel =
       Number(level);
 
     if (
-      !Number.isInteger(requestedLevel) ||
+      !Number.isInteger(
+        requestedLevel
+      ) ||
       requestedLevel < 1 ||
-      requestedLevel > 100
+      requestedLevel > MAX_LEVEL
     ) {
-      const error = new Error(
-        "Invalid level."
-      );
+      const error =
+        new Error(
+          "Invalid level."
+        );
 
       error.code =
         "INVALID_LEVEL";
@@ -324,11 +499,13 @@ export async function startGame({
       throw error;
     }
 
-    await client.query("BEGIN");
+    await client.query(
+      "BEGIN"
+    );
 
-    /* -------------------------------------------------------
+    /* =====================================================
        LOCK USER
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const userResult =
       await client.query(
@@ -340,8 +517,8 @@ export async function startGame({
           lives,
           last_life_at,
           easy_level,
-          hard_level,
-          difficult_level
+          medium_level,
+          hard_level
         FROM users
         WHERE id = $1
         FOR UPDATE
@@ -349,10 +526,13 @@ export async function startGame({
         [userId]
       );
 
-    if (userResult.rowCount === 0) {
-      const error = new Error(
-        "User not found."
-      );
+    if (
+      userResult.rowCount === 0
+    ) {
+      const error =
+        new Error(
+          "User not found."
+        );
 
       error.code =
         "USER_NOT_FOUND";
@@ -363,9 +543,9 @@ export async function startGame({
     const user =
       userResult.rows[0];
 
-    /* -------------------------------------------------------
+    /* =====================================================
        RECOVER LIVES
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const recovered =
       calculateLives(
@@ -379,14 +559,19 @@ export async function startGame({
     let lastLifeAt =
       recovered.lastLifeAt;
 
-    /* -------------------------------------------------------
-       UPDATE RECOVERED LIVES
-    ------------------------------------------------------- */
+    /*
+       Save recovered lives.
+    */
 
     if (
-      lives !== Number(user.lives) ||
-      String(lastLifeAt || "") !==
-        String(user.last_life_at || "")
+      lives !==
+        Number(user.lives) ||
+      String(
+        lastLifeAt || ""
+      ) !==
+        String(
+          user.last_life_at || ""
+        )
     ) {
       await client.query(
         `
@@ -405,18 +590,19 @@ export async function startGame({
       );
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        CHECK LIVES
-    ------------------------------------------------------- */
+    ===================================================== */
 
     if (lives <= 0) {
       await client.query(
         "ROLLBACK"
       );
 
-      const error = new Error(
-        "No lives available."
-      );
+      const error =
+        new Error(
+          "No lives available."
+        );
 
       error.code =
         "NO_LIVES";
@@ -432,13 +618,15 @@ export async function startGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
-       CHECK CURRENT LEVEL
-    ------------------------------------------------------- */
+    /* =====================================================
+       CHECK LEVEL
+    ===================================================== */
 
     const currentLevel =
       Number(
-        user[config.levelColumn] || 1
+        user[
+          config.levelColumn
+        ] || 1
       );
 
     if (
@@ -449,9 +637,10 @@ export async function startGame({
         "ROLLBACK"
       );
 
-      const error = new Error(
-        "Level is locked."
-      );
+      const error =
+        new Error(
+          "Level is locked."
+        );
 
       error.code =
         "LEVEL_LOCKED";
@@ -462,14 +651,15 @@ export async function startGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        CHECK ACTIVE GAME
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const activeResult =
       await client.query(
         `
-        SELECT id
+        SELECT
+          id
         FROM game_sessions
         WHERE
           user_id = $1
@@ -480,14 +670,17 @@ export async function startGame({
         [userId]
       );
 
-    if (activeResult.rowCount > 0) {
+    if (
+      activeResult.rowCount > 0
+    ) {
       await client.query(
         "ROLLBACK"
       );
 
-      const error = new Error(
-        "You already have an active game."
-      );
+      const error =
+        new Error(
+          "You already have an active game."
+        );
 
       error.code =
         "ACTIVE_GAME_EXISTS";
@@ -495,15 +688,19 @@ export async function startGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        CREATE PUZZLE
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const puzzle =
-      createPuzzle(config.pairs);
+      createPuzzle(
+        config.pairs
+      );
 
     const puzzleHash =
-      hashPuzzle(puzzle);
+      hashPuzzle(
+        puzzle
+      );
 
     const completionToken =
       crypto.randomUUID();
@@ -511,28 +708,39 @@ export async function startGame({
     const expiresAt =
       new Date(
         Date.now() +
-          SESSION_SECONDS * 1000
+          SESSION_SECONDS *
+            1000
       );
 
-    /* -------------------------------------------------------
+    /* =====================================================
        CONSUME LIFE
-    ------------------------------------------------------- */
+    ===================================================== */
 
     lives -= 1;
 
-    if (lives < MAX_LIVES) {
-      lastLifeAt = new Date();
-    }
+    /*
+       Every time a life is consumed,
+       start a fresh regeneration timer.
+    */
 
-    /* -------------------------------------------------------
+    lastLifeAt =
+      new Date();
+
+    /* =====================================================
        CREATE GAME SESSION
+    =====================================================
 
-       IMPORTANT:
-       Both reward and reward_coins are written.
+       We write BOTH:
 
-       reward_coins exists as a legacy NOT NULL column
-       in your current PostgreSQL database.
-    ------------------------------------------------------- */
+       reward
+       reward_coins
+
+       because your current PostgreSQL table
+       still contains the legacy reward_coins column.
+
+       We also write the legacy puzzle fields so
+       the existing Render database remains compatible.
+    */
 
     const sessionResult =
       await client.query(
@@ -546,10 +754,13 @@ export async function startGame({
           reward_coins,
           status,
           started_at,
+          created_at,
           expires_at,
           rows,
           cols,
           puzzle,
+          puzzle_deck,
+          puzzle_version,
           puzzle_hash,
           completion_token,
           matched_pairs,
@@ -564,10 +775,13 @@ export async function startGame({
           $5,
           'started',
           NOW(),
+          NOW(),
           $6,
           $7,
           $8,
           $9,
+          $9,
+          1,
           $10,
           $11,
           NULL,
@@ -587,7 +801,9 @@ export async function startGame({
           expiresAt,
           config.rows,
           config.cols,
-          JSON.stringify(puzzle),
+          JSON.stringify(
+            puzzle
+          ),
           puzzleHash,
           completionToken
         ]
@@ -596,9 +812,9 @@ export async function startGame({
     const session =
       sessionResult.rows[0];
 
-    /* -------------------------------------------------------
+    /* =====================================================
        SAVE LIFE
-    ------------------------------------------------------- */
+    ===================================================== */
 
     await client.query(
       `
@@ -618,6 +834,19 @@ export async function startGame({
 
     await client.query(
       "COMMIT"
+    );
+
+    console.log(
+      "GAME STARTED:",
+      {
+        sessionId:
+          session.id,
+        difficulty:
+          normalizedDifficulty,
+        level:
+          requestedLevel,
+        lives
+      }
     );
 
     return {
@@ -645,7 +874,9 @@ export async function startGame({
         config.reward,
 
       puzzle:
-        sanitizePuzzle(puzzle),
+        sanitizePuzzle(
+          puzzle
+        ),
 
       completionToken:
         session.completion_token,
@@ -668,6 +899,11 @@ export async function startGame({
       );
     } catch {}
 
+    console.error(
+      "START GAME ERROR:",
+      error
+    );
+
     throw error;
   } finally {
     client.release();
@@ -687,16 +923,17 @@ export async function completeGame({
   matchedPairs,
   matchedIndexes
 }) {
-  const client = await pool.connect();
+  const client =
+    await pool.connect();
 
   try {
     await client.query(
       "BEGIN"
     );
 
-    /* -------------------------------------------------------
+    /* =====================================================
        GET GAME SESSION
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const sessionResult =
       await client.query(
@@ -722,10 +959,13 @@ export async function completeGame({
         [gameSessionId]
       );
 
-    if (sessionResult.rowCount === 0) {
-      const error = new Error(
-        "Game session not found."
-      );
+    if (
+      sessionResult.rowCount === 0
+    ) {
+      const error =
+        new Error(
+          "Game session not found."
+        );
 
       error.code =
         "SESSION_NOT_FOUND";
@@ -736,17 +976,20 @@ export async function completeGame({
     const session =
       sessionResult.rows[0];
 
-    /* -------------------------------------------------------
+    /* =====================================================
        OWNERSHIP
-    ------------------------------------------------------- */
+    ===================================================== */
 
     if (
-      String(session.user_id) !==
+      String(
+        session.user_id
+      ) !==
       String(userId)
     ) {
-      const error = new Error(
-        "Invalid game session."
-      );
+      const error =
+        new Error(
+          "Invalid game session."
+        );
 
       error.code =
         "INVALID_SESSION";
@@ -754,17 +997,18 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        STATUS
-    ------------------------------------------------------- */
+    ===================================================== */
 
     if (
       session.status !==
       "started"
     ) {
-      const error = new Error(
-        "Game session is no longer active."
-      );
+      const error =
+        new Error(
+          "Game session is no longer active."
+        );
 
       error.code =
         "SESSION_NOT_ACTIVE";
@@ -772,17 +1016,22 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        COMPLETION TOKEN
-    ------------------------------------------------------- */
+    ===================================================== */
 
     if (
-      String(session.completion_token) !==
-      String(completionToken)
+      String(
+        session.completion_token
+      ) !==
+      String(
+        completionToken
+      )
     ) {
-      const error = new Error(
-        "Invalid completion token."
-      );
+      const error =
+        new Error(
+          "Invalid completion token."
+        );
 
       error.code =
         "INVALID_COMPLETION_TOKEN";
@@ -790,14 +1039,16 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        EXPIRATION
-    ------------------------------------------------------- */
+    ===================================================== */
 
     if (
       session.expires_at &&
-      new Date(session.expires_at)
-        .getTime() < Date.now()
+      new Date(
+        session.expires_at
+      ).getTime() <
+        Date.now()
     ) {
       await client.query(
         `
@@ -814,9 +1065,10 @@ export async function completeGame({
         "COMMIT"
       );
 
-      const error = new Error(
-        "Game session expired."
-      );
+      const error =
+        new Error(
+          "Game session expired."
+        );
 
       error.code =
         "SESSION_EXPIRED";
@@ -824,21 +1076,24 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
-       VALIDATE MOVES
-    ------------------------------------------------------- */
+    /* =====================================================
+       MOVES
+    ===================================================== */
 
     const totalMoves =
       Number(moves);
 
     if (
-      !Number.isInteger(totalMoves) ||
+      !Number.isInteger(
+        totalMoves
+      ) ||
       totalMoves <= 0 ||
       totalMoves > 10000
     ) {
-      const error = new Error(
-        "Invalid moves."
-      );
+      const error =
+        new Error(
+          "Invalid moves."
+        );
 
       error.code =
         "INVALID_MOVES";
@@ -846,21 +1101,27 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
-       VALIDATE DURATION
-    ------------------------------------------------------- */
+    /* =====================================================
+       DURATION
+    ===================================================== */
 
     const duration =
-      Number(durationSeconds);
+      Number(
+        durationSeconds
+      );
 
     if (
-      !Number.isFinite(duration) ||
+      !Number.isFinite(
+        duration
+      ) ||
       duration < 0 ||
-      duration > SESSION_SECONDS + 60
+      duration >
+        SESSION_SECONDS + 60
     ) {
-      const error = new Error(
-        "Invalid game duration."
-      );
+      const error =
+        new Error(
+          "Invalid game duration."
+        );
 
       error.code =
         "INVALID_DURATION";
@@ -868,23 +1129,27 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        PUZZLE
-    ------------------------------------------------------- */
+    ===================================================== */
 
     let puzzle =
       session.puzzle;
 
     if (
-      typeof puzzle === "string"
+      typeof puzzle ===
+      "string"
     ) {
       try {
         puzzle =
-          JSON.parse(puzzle);
+          JSON.parse(
+            puzzle
+          );
       } catch {
-        const error = new Error(
-          "Invalid puzzle data."
-        );
+        const error =
+          new Error(
+            "Invalid puzzle data."
+          );
 
         error.code =
           "INVALID_PUZZLE";
@@ -893,10 +1158,15 @@ export async function completeGame({
       }
     }
 
-    if (!Array.isArray(puzzle)) {
-      const error = new Error(
-        "Invalid puzzle."
-      );
+    if (
+      !Array.isArray(
+        puzzle
+      )
+    ) {
+      const error =
+        new Error(
+          "Invalid puzzle."
+        );
 
       error.code =
         "INVALID_PUZZLE";
@@ -904,20 +1174,27 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        VERIFY PUZZLE HASH
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const calculatedHash =
-      hashPuzzle(puzzle);
+      hashPuzzle(
+        puzzle
+      );
 
     if (
-      String(calculatedHash) !==
-      String(session.puzzle_hash)
+      String(
+        calculatedHash
+      ) !==
+      String(
+        session.puzzle_hash
+      )
     ) {
-      const error = new Error(
-        "Puzzle verification failed."
-      );
+      const error =
+        new Error(
+          "Puzzle verification failed."
+        );
 
       error.code =
         "PUZZLE_HASH_MISMATCH";
@@ -925,9 +1202,9 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        VERIFY SOLUTION
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const solutionValid =
       verifyPuzzleSolution(
@@ -937,9 +1214,10 @@ export async function completeGame({
       );
 
     if (!solutionValid) {
-      const error = new Error(
-        "Invalid puzzle solution."
-      );
+      const error =
+        new Error(
+          "Invalid puzzle solution."
+        );
 
       error.code =
         "INVALID_SOLUTION";
@@ -947,9 +1225,9 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        LOCK USER
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const userResult =
       await client.query(
@@ -961,8 +1239,8 @@ export async function completeGame({
           last_life_at,
           games_played,
           easy_level,
-          hard_level,
-          difficult_level
+          medium_level,
+          hard_level
         FROM users
         WHERE id = $1
         FOR UPDATE
@@ -970,10 +1248,13 @@ export async function completeGame({
         [userId]
       );
 
-    if (userResult.rowCount === 0) {
-      const error = new Error(
-        "User not found."
-      );
+    if (
+      userResult.rowCount === 0
+    ) {
+      const error =
+        new Error(
+          "User not found."
+        );
 
       error.code =
         "USER_NOT_FOUND";
@@ -984,9 +1265,9 @@ export async function completeGame({
     const user =
       userResult.rows[0];
 
-    /* -------------------------------------------------------
+    /* =====================================================
        RECOVER LIVES
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const recovered =
       calculateLives(
@@ -1000,9 +1281,9 @@ export async function completeGame({
     const lastLifeAt =
       recovered.lastLifeAt;
 
-    /* -------------------------------------------------------
+    /* =====================================================
        REWARD
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const reward =
       Number(
@@ -1012,12 +1293,15 @@ export async function completeGame({
       );
 
     if (
-      !Number.isInteger(reward) ||
+      !Number.isInteger(
+        reward
+      ) ||
       reward <= 0
     ) {
-      const error = new Error(
-        "Invalid reward."
-      );
+      const error =
+        new Error(
+          "Invalid reward."
+        );
 
       error.code =
         "INVALID_REWARD";
@@ -1025,19 +1309,25 @@ export async function completeGame({
       throw error;
     }
 
-    /* -------------------------------------------------------
-       NEXT LEVEL
-    ------------------------------------------------------- */
+    /* =====================================================
+       DIFFICULTY
+    ===================================================== */
 
-    const config =
-      getDifficultyConfig(
+    const normalizedDifficulty =
+      normalizeDifficulty(
         session.difficulty
       );
 
-    if (!config) {
-      const error = new Error(
-        "Invalid difficulty."
+    const config =
+      getDifficultyConfig(
+        normalizedDifficulty
       );
+
+    if (!config) {
+      const error =
+        new Error(
+          "Invalid difficulty."
+        );
 
       error.code =
         "INVALID_DIFFICULTY";
@@ -1045,14 +1335,20 @@ export async function completeGame({
       throw error;
     }
 
-    const completedLevel =
-      Number(session.level);
+    /* =====================================================
+       LEVEL
+    ===================================================== */
 
-    const maxLevel = 100;
+    const completedLevel =
+      Number(
+        session.level
+      );
 
     const currentLevel =
       Number(
-        user[config.levelColumn] || 1
+        user[
+          config.levelColumn
+        ] || 1
       );
 
     let nextLevel =
@@ -1062,33 +1358,40 @@ export async function completeGame({
       false;
 
     if (
-      completedLevel >= currentLevel
+      completedLevel >=
+      currentLevel
     ) {
       nextLevel =
         Math.min(
-          maxLevel + 1,
+          MAX_LEVEL + 1,
           completedLevel + 1
         );
     }
 
     if (
-      completedLevel >= maxLevel
+      completedLevel >=
+      MAX_LEVEL
     ) {
-      completedAllLevels = true;
-      nextLevel = maxLevel + 1;
+      completedAllLevels =
+        true;
+
+      nextLevel =
+        MAX_LEVEL + 1;
     }
 
-    /* -------------------------------------------------------
+    /* =====================================================
        UPDATE USER
-    ------------------------------------------------------- */
+    ===================================================== */
 
     const newCoins =
-      Number(user.coins || 0) +
-      reward;
+      Number(
+        user.coins || 0
+      ) + reward;
 
     const newGamesPlayed =
-      Number(user.games_played || 0) +
-      1;
+      Number(
+        user.games_played || 0
+      ) + 1;
 
     await client.query(
       `
@@ -1112,9 +1415,9 @@ export async function completeGame({
       ]
     );
 
-    /* -------------------------------------------------------
+    /* =====================================================
        COMPLETE SESSION
-    ------------------------------------------------------- */
+    ===================================================== */
 
     await client.query(
       `
@@ -1130,8 +1433,12 @@ export async function completeGame({
       `,
       [
         totalMoves,
-        Math.floor(duration),
-        Number(matchedPairs),
+        Math.floor(
+          duration
+        ),
+        Number(
+          matchedPairs
+        ),
         JSON.stringify(
           matchedIndexes
         ),
@@ -1139,9 +1446,9 @@ export async function completeGame({
       ]
     );
 
-    /* -------------------------------------------------------
+    /* =====================================================
        GAME RESULT
-    ------------------------------------------------------- */
+    ===================================================== */
 
     await client.query(
       `
@@ -1165,23 +1472,27 @@ export async function completeGame({
         $7,
         NOW()
       )
-      ON CONFLICT (game_session_id)
+      ON CONFLICT (
+        game_session_id
+      )
       DO NOTHING
       `,
       [
         userId,
         gameSessionId,
-        session.difficulty,
+        normalizedDifficulty,
         completedLevel,
         reward,
         totalMoves,
-        Math.floor(duration)
+        Math.floor(
+          duration
+        )
       ]
     );
 
-    /* -------------------------------------------------------
+    /* =====================================================
        COIN TRANSACTION
-    ------------------------------------------------------- */
+    ===================================================== */
 
     await client.query(
       `
@@ -1203,7 +1514,9 @@ export async function completeGame({
       [
         userId,
         reward,
-        String(gameSessionId)
+        String(
+          gameSessionId
+        )
       ]
     );
 
@@ -1233,7 +1546,8 @@ export async function completeGame({
           lastLifeAt
         ),
 
-      doubleRewardAvailable: true
+      doubleRewardAvailable:
+        true
     };
   } catch (error) {
     try {
@@ -1241,6 +1555,11 @@ export async function completeGame({
         "ROLLBACK"
       );
     } catch {}
+
+    console.error(
+      "COMPLETE GAME ERROR:",
+      error
+    );
 
     throw error;
   } finally {
@@ -1285,7 +1604,9 @@ export async function getGameStatus({
       [userId]
     );
 
-  if (result.rowCount === 0) {
+  if (
+    result.rowCount === 0
+  ) {
     return {
       active: false,
       session: null
@@ -1295,25 +1616,29 @@ export async function getGameStatus({
   const session =
     result.rows[0];
 
-  /* -------------------------------------------------------
-     CHECK EXPIRATION
-  ------------------------------------------------------- */
+  /* =====================================================
+     EXPIRED SESSION
+  ===================================================== */
 
   if (
     session.expires_at &&
-    new Date(session.expires_at)
-      .getTime() <= Date.now()
+    new Date(
+      session.expires_at
+    ).getTime() <=
+      Date.now()
   ) {
     await pool.query(
       `
       UPDATE game_sessions
       SET
         status = 'expired',
-        completed_at = COALESCE(
-          completed_at,
-          NOW()
-        )
-      WHERE id = $1
+        completed_at =
+          COALESCE(
+            completed_at,
+            NOW()
+          )
+      WHERE
+        id = $1
         AND status = 'started'
       `,
       [session.id]
@@ -1325,19 +1650,22 @@ export async function getGameStatus({
     };
   }
 
-  /* -------------------------------------------------------
+  /* =====================================================
      PARSE PUZZLE
-  ------------------------------------------------------- */
+  ===================================================== */
 
   let puzzle =
     session.puzzle;
 
   if (
-    typeof puzzle === "string"
+    typeof puzzle ===
+    "string"
   ) {
     try {
       puzzle =
-        JSON.parse(puzzle);
+        JSON.parse(
+          puzzle
+        );
     } catch {
       puzzle = [];
     }
@@ -1351,19 +1679,29 @@ export async function getGameStatus({
         session.id,
 
       difficulty:
-        session.difficulty,
+        normalizeDifficulty(
+          session.difficulty
+        ),
 
       level:
-        Number(session.level),
+        Number(
+          session.level
+        ),
 
       pairs:
-        Number(session.pairs),
+        Number(
+          session.pairs
+        ),
 
       rows:
-        Number(session.rows),
+        Number(
+          session.rows
+        ),
 
       cols:
-        Number(session.cols),
+        Number(
+          session.cols
+        ),
 
       reward:
         Number(
@@ -1373,7 +1711,9 @@ export async function getGameStatus({
         ),
 
       puzzle:
-        sanitizePuzzle(puzzle),
+        sanitizePuzzle(
+          puzzle
+        ),
 
       puzzleHash:
         session.puzzle_hash,
