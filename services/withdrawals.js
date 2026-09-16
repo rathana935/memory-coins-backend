@@ -1,8 +1,9 @@
 import pool from "../db/pool.js";
 
+
 /*
 =========================================================
-MEMORY CARD
+MEMORY COINS
 WITHDRAWAL SERVICE
 =========================================================
 
@@ -12,7 +13,7 @@ ECONOMY
 
 MINIMUM
 
-2,500 coins
+2,500 coins = $0.25
 
 PAYMENT METHOD
 
@@ -56,18 +57,14 @@ const PROVIDER = "faucetpay";
 
 function validateEmail(email) {
 
-    if (
-        typeof email !== "string"
-    ) {
+    if (typeof email !== "string") {
         return false;
     }
-
 
     const value =
         email
             .trim()
             .toLowerCase();
-
 
     if (
         value.length < 5 ||
@@ -76,9 +73,7 @@ function validateEmail(email) {
         return false;
     }
 
-
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-        .test(value);
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
 
@@ -101,16 +96,24 @@ function normalizeEmail(email) {
 
 function validateUserId(userId) {
 
-    if (
+    return !(
         userId === null ||
         userId === undefined ||
         userId === ""
-    ) {
-        return false;
-    }
+    );
+
+}
 
 
-    return true;
+/* =========================================================
+   VALIDATE UUID
+========================================================= */
+
+function validateUUID(value) {
+
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(String(value || ""));
+
 }
 
 
@@ -120,9 +123,18 @@ function validateUserId(userId) {
 
 function coinsToUsd(coins) {
 
-    return (
-        Number(coins) /
-        COINS_PER_USD
+    /*
+     * Keep the value at 4 decimal places.
+     *
+     * 2,500 coins = 0.25 USD
+     * 10,000 coins = 1.00 USD
+     */
+
+    return Number(
+        (
+            Number(coins) /
+            COINS_PER_USD
+        ).toFixed(4)
     );
 
 }
@@ -138,21 +150,15 @@ function maskEmail(email) {
         return null;
     }
 
-
     const value =
         String(email);
-
 
     const atIndex =
         value.indexOf("@");
 
-
-    if (
-        atIndex <= 0
-    ) {
+    if (atIndex <= 0) {
         return "***";
     }
-
 
     const name =
         value.substring(
@@ -160,16 +166,12 @@ function maskEmail(email) {
             atIndex
         );
 
-
     const domain =
         value.substring(
             atIndex + 1
         );
 
-
-    if (
-        name.length <= 2
-    ) {
+    if (name.length <= 2) {
 
         return (
             "*" +
@@ -177,7 +179,6 @@ function maskEmail(email) {
         );
 
     }
-
 
     return (
         name.substring(0, 2) +
@@ -201,7 +202,6 @@ function formatWithdrawal(
         return null;
     }
 
-
     return {
 
         id:
@@ -211,14 +211,10 @@ function formatWithdrawal(
             row.provider,
 
         amountCoins:
-            Number(
-                row.amount_coins
-            ),
+            Number(row.amount_coins),
 
         amountUsd:
-            Number(
-                row.amount_usd
-            ),
+            Number(row.amount_usd),
 
         faucetpayEmail:
             includeSensitive
@@ -256,19 +252,7 @@ function formatWithdrawal(
 
 /* =========================================================
    CREATE WITHDRAWAL
-=========================================================
-
-EXPECTED INPUT
-
-createWithdrawal({
-    userId,
-    amountCoins,
-    provider,
-    faucetpayEmail
-})
-
-=========================================================
-*/
+========================================================= */
 
 export async function createWithdrawal({
 
@@ -286,9 +270,7 @@ export async function createWithdrawal({
        VALIDATE USER
     ===================================================== */
 
-    if (
-        !validateUserId(userId)
-    ) {
+    if (!validateUserId(userId)) {
 
         const error =
             new Error(
@@ -313,10 +295,7 @@ export async function createWithdrawal({
     const coins =
         Number(amountCoins);
 
-
-    if (
-        !Number.isSafeInteger(coins)
-    ) {
+    if (!Number.isSafeInteger(coins)) {
 
         const error =
             new Error(
@@ -333,10 +312,7 @@ export async function createWithdrawal({
 
     }
 
-
-    if (
-        coins <= 0
-    ) {
+    if (coins <= 0) {
 
         const error =
             new Error(
@@ -384,12 +360,9 @@ export async function createWithdrawal({
     ===================================================== */
 
     const normalizedProvider =
-        String(
-            provider || ""
-        )
-        .trim()
-        .toLowerCase();
-
+        String(provider || "")
+            .trim()
+            .toLowerCase();
 
     if (
         normalizedProvider !==
@@ -437,7 +410,6 @@ export async function createWithdrawal({
 
     }
 
-
     const email =
         normalizeEmail(
             faucetpayEmail
@@ -449,23 +421,20 @@ export async function createWithdrawal({
     ===================================================== */
 
     const amountUsd =
-        coinsToUsd(
-            coins
-        );
+        coinsToUsd(coins);
 
 
     /* =====================================================
-       DATABASE CONNECTION
+       DATABASE
     ===================================================== */
 
     const client =
         await pool.connect();
 
-
     try {
 
         /* =================================================
-           START TRANSACTION
+           BEGIN
         ================================================= */
 
         await client.query(
@@ -474,7 +443,7 @@ export async function createWithdrawal({
 
 
         /* =================================================
-           LOCK USER ROW
+           LOCK USER
         ================================================= */
 
         const userResult =
@@ -548,9 +517,7 @@ export async function createWithdrawal({
         ================================================= */
 
         const currentBalance =
-            Number(
-                user.coins
-            );
+            Number(user.coins);
 
 
         if (
@@ -601,7 +568,7 @@ export async function createWithdrawal({
 
 
         /* =================================================
-           PREVENT MULTIPLE ACTIVE WITHDRAWALS
+           ACTIVE WITHDRAWAL CHECK
         ================================================= */
 
         const pendingResult =
@@ -688,19 +655,12 @@ export async function createWithdrawal({
                 INSERT INTO withdrawals (
 
                     user_id,
-
                     provider,
-
                     amount_coins,
-
                     amount_usd,
-
                     faucetpay_email,
-
                     status,
-
                     requested_at,
-
                     updated_at
 
                 )
@@ -721,25 +681,15 @@ export async function createWithdrawal({
                 RETURNING
 
                     id,
-
                     provider,
-
                     amount_coins,
-
                     amount_usd,
-
                     faucetpay_email,
-
                     status,
-
                     provider_transaction_id,
-
                     failure_reason,
-
                     requested_at,
-
                     processed_at,
-
                     updated_at
                 `,
 
@@ -768,17 +718,11 @@ export async function createWithdrawal({
             INSERT INTO coin_transactions (
 
                 user_id,
-
                 type,
-
                 amount,
-
                 balance_before,
-
                 balance_after,
-
                 reference_id,
-
                 description
 
             )
@@ -786,17 +730,11 @@ export async function createWithdrawal({
             VALUES (
 
                 $1,
-
                 'withdrawal',
-
                 $2,
-
                 $3,
-
                 $4,
-
                 $5,
-
                 $6
 
             )
@@ -848,19 +786,13 @@ export async function createWithdrawal({
 
     } catch (error) {
 
-        /* =================================================
-           ROLLBACK
-        ================================================= */
-
         try {
 
             await client.query(
                 "ROLLBACK"
             );
 
-        } catch (
-            rollbackError
-        ) {
+        } catch (rollbackError) {
 
             console.error(
                 "Withdrawal rollback error:",
@@ -869,9 +801,7 @@ export async function createWithdrawal({
 
         }
 
-
         throw error;
-
 
     } finally {
 
@@ -922,7 +852,6 @@ export async function getUserWithdrawals(
             10
         );
 
-
     if (
         !Number.isInteger(
             safeLimit
@@ -932,7 +861,6 @@ export async function getUserWithdrawals(
         safeLimit = 20;
 
     }
-
 
     safeLimit =
         Math.min(
@@ -949,7 +877,6 @@ export async function getUserWithdrawals(
             offset,
             10
         );
-
 
     if (
         !Number.isInteger(
@@ -970,25 +897,15 @@ export async function getUserWithdrawals(
             SELECT
 
                 id,
-
                 provider,
-
                 amount_coins,
-
                 amount_usd,
-
                 faucetpay_email,
-
                 status,
-
                 provider_transaction_id,
-
                 failure_reason,
-
                 requested_at,
-
                 processed_at,
-
                 updated_at
 
             FROM withdrawals
@@ -998,7 +915,6 @@ export async function getUserWithdrawals(
             ORDER BY requested_at DESC
 
             LIMIT $2
-
             OFFSET $3
             `,
 
@@ -1024,21 +940,7 @@ export async function getUserWithdrawals(
 
 /* =========================================================
    GET SINGLE WITHDRAWAL
-=========================================================
-
-IMPORTANT:
-
-The route calls:
-
-getWithdrawal(
-    withdrawalId,
-    userId
-)
-
-So this function follows that exact order.
-
-=========================================================
-*/
+========================================================= */
 
 export async function getWithdrawal(
 
@@ -1049,9 +951,7 @@ export async function getWithdrawal(
 ) {
 
     if (
-        !validateUserId(
-            userId
-        )
+        !validateUserId(userId)
     ) {
 
         const error =
@@ -1076,18 +976,20 @@ export async function getWithdrawal(
         ).trim();
 
 
-    if (!id) {
+    if (
+        !validateUUID(id)
+    ) {
 
         const error =
             new Error(
-                "Withdrawal not found."
+                "Invalid withdrawal ID."
             );
 
         error.code =
-            "WITHDRAWAL_NOT_FOUND";
+            "INVALID_WITHDRAWAL_ID";
 
         error.statusCode =
-            404;
+            400;
 
         throw error;
 
@@ -1101,31 +1003,20 @@ export async function getWithdrawal(
             SELECT
 
                 id,
-
                 provider,
-
                 amount_coins,
-
                 amount_usd,
-
                 faucetpay_email,
-
                 status,
-
                 provider_transaction_id,
-
                 failure_reason,
-
                 requested_at,
-
                 processed_at,
-
                 updated_at
 
             FROM withdrawals
 
             WHERE id = $1
-
               AND user_id = $2
 
             LIMIT 1
@@ -1160,11 +1051,8 @@ export async function getWithdrawal(
 
 
     return formatWithdrawal(
-
         result.rows[0],
-
         false
-
     );
 
 }
