@@ -10,9 +10,7 @@
 BEGIN;
 
 
-/* ============================================================
-   1. USERS
-============================================================ */
+/* ============================================================ 1. USERS ============================================================ */
 
 ALTER TABLE users
 ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ
@@ -41,9 +39,7 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS last_daily_claim DATE;
 
 
-/* ============================================================
-   2. NORMALIZE NULL USER VALUES
-============================================================ */
+/* ============================================================ 2. NORMALIZE NULL USER VALUES ============================================================ */
 
 UPDATE users
 SET lives = 5
@@ -66,9 +62,7 @@ SET last_seen_at = NOW()
 WHERE last_seen_at IS NULL;
 
 
-/* ============================================================
-   3. USERS CHECK CONSTRAINT
-============================================================ */
+/* ============================================================ 3. USERS CHECK CONSTRAINT ============================================================ */
 
 DO $$
 BEGIN
@@ -90,9 +84,7 @@ END
 $$;
 
 
-/* ============================================================
-   4. ADSGRAM REWARD FIELDS
-============================================================ */
+/* ============================================================ 4. ADSGRAM REWARD FIELDS ============================================================ */
 
 ALTER TABLE ad_rewards
 ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMPTZ;
@@ -103,9 +95,7 @@ NOT NULL
 DEFAULT '{}'::jsonb;
 
 
-/* ============================================================
-   5. ADSGRAM INDEXES
-============================================================ */
+/* ============================================================ 5. ADSGRAM INDEXES ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_ad_rewards_pending
 ON ad_rewards(
@@ -123,9 +113,7 @@ ON ad_rewards(
 );
 
 
-/* ============================================================
-   6. GAME SESSION SAFETY
-============================================================ */
+/* ============================================================ 6. GAME SESSION SAFETY ============================================================ */
 
 DO $$
 BEGIN
@@ -145,9 +133,7 @@ END
 $$;
 
 
-/* ============================================================
-   7. WITHDRAWAL INDEXES
-============================================================ */
+/* ============================================================ 7. WITHDRAWAL INDEXES ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user
 ON withdrawals(user_id);
@@ -162,16 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_withdrawals_created
 ON withdrawals(requested_at DESC);
 
 
-/* ============================================================
-   8. CHECK FOR DUPLICATE ACTIVE WITHDRAWALS
-============================================================
-
-   We do NOT automatically delete or cancel withdrawals.
-
-   If duplicates exist, the migration stops safely and shows
-   which user has multiple active withdrawals.
-
-============================================================ */
+/* ============================================================ 8. CHECK FOR DUPLICATE ACTIVE WITHDRAWALS ============================================================ We do NOT automatically delete or cancel withdrawals. If duplicates exist, the migration stops safely and shows which user has multiple active withdrawals. ============================================================ */
 
 DO $$
 DECLARE
@@ -200,9 +177,7 @@ END
 $$;
 
 
-/* ============================================================
-   9. PREVENT MULTIPLE ACTIVE WITHDRAWALS
-============================================================ */
+/* ============================================================ 9. PREVENT MULTIPLE ACTIVE WITHDRAWALS ============================================================ */
 
 CREATE UNIQUE INDEX IF NOT EXISTS
 idx_one_active_withdrawal_per_user
@@ -213,9 +188,7 @@ WHERE status IN (
 );
 
 
-/* ============================================================
-   10. COIN TRANSACTION INDEXES
-============================================================ */
+/* ============================================================ 10. COIN TRANSACTION INDEXES ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_transactions_user
 ON coin_transactions(user_id);
@@ -227,9 +200,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_type
 ON coin_transactions(type);
 
 
-/* ============================================================
-   11. REFERRAL INDEXES
-============================================================ */
+/* ============================================================ 11. REFERRAL INDEXES ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_referrals_referrer
 ON referrals(referrer_user_id);
@@ -238,9 +209,7 @@ CREATE INDEX IF NOT EXISTS idx_referrals_referred
 ON referrals(referred_user_id);
 
 
-/* ============================================================
-   12. AUTH SESSION INDEXES
-============================================================ */
+/* ============================================================ 12. AUTH SESSION INDEXES ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user
 ON auth_sessions(user_id);
@@ -249,9 +218,7 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry
 ON auth_sessions(expires_at);
 
 
-/* ============================================================
-   13. LUCKY ROLL INDEXES
-============================================================ */
+/* ============================================================ 13. LUCKY ROLL INDEXES ============================================================ */
 
 CREATE INDEX IF NOT EXISTS idx_lucky_rolls_user
 ON lucky_rolls(user_id);
@@ -266,9 +233,7 @@ ON lucky_rolls(
 );
 
 
-/* ============================================================
-   14. UPDATED_AT FUNCTION
-============================================================ */
+/* ============================================================ 14. UPDATED_AT FUNCTION ============================================================ */
 
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 
@@ -285,9 +250,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 
-/* ============================================================
-   15. USERS UPDATED_AT TRIGGER
-============================================================ */
+/* ============================================================ 15. USERS UPDATED_AT TRIGGER ============================================================ */
 
 DROP TRIGGER IF EXISTS users_updated_at
 ON users;
@@ -301,9 +264,7 @@ FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 
 
-/* ============================================================
-   16. WITHDRAWALS UPDATED_AT TRIGGER
-============================================================ */
+/* ============================================================ 16. WITHDRAWALS UPDATED_AT TRIGGER ============================================================ */
 
 DROP TRIGGER IF EXISTS withdrawals_updated_at
 ON withdrawals;
@@ -317,8 +278,6 @@ FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 
 
-/* ============================================================
-   FINISH
-============================================================ */
+/* ============================================================ FINISH ============================================================ */
 
 COMMIT;
