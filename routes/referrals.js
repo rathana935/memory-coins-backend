@@ -2,7 +2,9 @@ import express from "express";
 
 import pool from "../db/pool.js";
 
+
 const router = express.Router();
+
 
 /* =========================================================
    CONFIG
@@ -10,18 +12,42 @@ const router = express.Router();
 
 const DEFAULT_REFERRAL_REWARD = 250;
 
-/*
-   Your Telegram Bot username.
-
-   Example:
-   TELEGRAM_BOT_USERNAME=MemoryCoinsBot
-
-   Do NOT include @.
-*/
-
 const TELEGRAM_BOT_USERNAME =
-    process.env.TELEGRAM_BOT_USERNAME ||
-    "YOUR_BOT_USERNAME";
+    String(
+        process.env.TELEGRAM_BOT_USERNAME || ""
+    )
+        .trim()
+        .replace(/^@/, "");
+
+
+/* =========================================================
+   USER ID HELPER
+========================================================= */
+
+function getUserId(req) {
+
+    return (
+        req.user?.user_id ||
+        req.user?.id ||
+        null
+    );
+
+}
+
+
+/* =========================================================
+   TELEGRAM ID HELPER
+========================================================= */
+
+function getTelegramId(req) {
+
+    return (
+        req.user?.telegram_id ||
+        req.user?.telegramId ||
+        null
+    );
+
+}
 
 
 /* =========================================================
@@ -36,11 +62,15 @@ async function getReferralReward() {
             await pool.query(
                 `
                 SELECT value
+
                 FROM app_settings
+
                 WHERE key = 'referral'
+
                 LIMIT 1
                 `
             );
+
 
         if (
             result.rows.length > 0 &&
@@ -50,17 +80,22 @@ async function getReferralReward() {
             const settings =
                 result.rows[0].value;
 
+
             const reward =
                 Number(
                     settings.reward_coins
                 );
 
+
             if (
                 Number.isInteger(reward) &&
                 reward > 0
             ) {
+
                 return reward;
+
             }
+
         }
 
     } catch (error) {
@@ -69,9 +104,36 @@ async function getReferralReward() {
             "Referral settings error:",
             error
         );
+
     }
 
+
     return DEFAULT_REFERRAL_REWARD;
+
+}
+
+
+/* =========================================================
+   BUILD TELEGRAM REFERRAL LINK
+========================================================= */
+
+function buildReferralLink(telegramId) {
+
+    if (
+        !TELEGRAM_BOT_USERNAME ||
+        !telegramId
+    ) {
+
+        return null;
+
+    }
+
+
+    return (
+        `https://t.me/${TELEGRAM_BOT_USERNAME}` +
+        `?startapp=ref_${telegramId}`
+    );
+
 }
 
 
@@ -83,25 +145,68 @@ async function getReferralReward() {
 
 router.get(
     "/",
+
     async (req, res) => {
 
         try {
 
+            /* =================================================
+               USER
+            ================================================= */
+
             const userId =
-                req.user.user_id;
+                getUserId(req);
+
+
+            const telegramId =
+                getTelegramId(req);
+
+
+            if (!userId) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Authenticated user ID is missing."
+
+                });
+
+            }
+
+
+            if (!telegramId) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Telegram user ID is missing."
+
+                });
+
+            }
+
+
+            /* =================================================
+               REFERRAL REWARD
+            ================================================= */
 
             const referralReward =
                 await getReferralReward();
 
 
-            /* ---------------------------------------------
-               Get referral statistics
-            --------------------------------------------- */
+            /* =================================================
+               REFERRAL STATISTICS
+            ================================================= */
 
             const statsResult =
                 await pool.query(
                     `
                     SELECT
+
                         COUNT(*)::INTEGER
                             AS referral_count,
 
@@ -113,9 +218,10 @@ router.get(
 
                     FROM referrals
 
-                    WHERE referrer_user_id = $1
+                    WHERE
+                        referrer_user_id = $1
 
-                      AND status = 'completed'
+                        AND status = 'completed'
                     `,
                     [
                         userId
@@ -127,41 +233,45 @@ router.get(
                 statsResult.rows[0];
 
 
-            /* ---------------------------------------------
-               Build Telegram referral link
-            --------------------------------------------- */
+            /* =================================================
+               REFERRAL LINK
+            ================================================= */
 
-            const telegramId =
-                String(
-                    req.user.telegram_id
+            const referralLink =
+                buildReferralLink(
+                    telegramId
                 );
 
 
-            const referralLink =
-                `https://t.me/${TELEGRAM_BOT_USERNAME}?startapp=ref_${telegramId}`;
-
-
-            /* ---------------------------------------------
-               Get referral history
-            --------------------------------------------- */
+            /* =================================================
+               REFERRAL HISTORY
+            ================================================= */
 
             const referralsResult =
                 await pool.query(
                     `
                     SELECT
+
                         r.id,
+
                         r.reward_coins,
+
                         r.status,
+
                         r.created_at,
+
                         r.completed_at,
 
                         u.telegram_id,
+
                         u.username,
+
                         u.first_name
 
                     FROM referrals r
 
                     INNER JOIN users u
+
                         ON u.id =
                            r.referred_user_id
 
@@ -179,6 +289,10 @@ router.get(
                 );
 
 
+            /* =================================================
+               RESPONSE
+            ================================================= */
+
             return res.json({
 
                 success: true,
@@ -191,12 +305,20 @@ router.get(
                     rewardPerInvite:
                         referralReward,
 
+                    reward_per_invite:
+                        referralReward,
+
                     count:
                         Number(
                             stats.referral_count
                         ),
 
                     totalEarned:
+                        Number(
+                            stats.reward_coins
+                        ),
+
+                    total_earned:
                         Number(
                             stats.reward_coins
                         )
@@ -216,7 +338,15 @@ router.get(
                             firstName:
                                 referral.first_name,
 
+                            first_name:
+                                referral.first_name,
+
                             rewardCoins:
+                                Number(
+                                    referral.reward_coins
+                                ),
+
+                            reward_coins:
                                 Number(
                                     referral.reward_coins
                                 ),
@@ -227,7 +357,13 @@ router.get(
                             createdAt:
                                 referral.created_at,
 
+                            created_at:
+                                referral.created_at,
+
                             completedAt:
+                                referral.completed_at,
+
+                            completed_at:
                                 referral.completed_at
 
                         })
@@ -266,9 +402,28 @@ router.get(
 
 router.get(
     "/stats",
+
     async (req, res) => {
 
         try {
+
+            const userId =
+                getUserId(req);
+
+
+            if (!userId) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Authenticated user ID is missing."
+
+                });
+
+            }
+
 
             const referralReward =
                 await getReferralReward();
@@ -278,6 +433,7 @@ router.get(
                 await pool.query(
                     `
                     SELECT
+
                         COUNT(*)::INTEGER
                             AS referral_count,
 
@@ -289,12 +445,13 @@ router.get(
 
                     FROM referrals
 
-                    WHERE referrer_user_id = $1
+                    WHERE
+                        referrer_user_id = $1
 
-                      AND status = 'completed'
+                        AND status = 'completed'
                     `,
                     [
-                        req.user.user_id
+                        userId
                     ]
                 );
 
@@ -303,21 +460,39 @@ router.get(
                 result.rows[0];
 
 
+            const count =
+                Number(
+                    row.referral_count
+                );
+
+
+            const totalEarned =
+                Number(
+                    row.reward_coins
+                );
+
+
             return res.json({
 
                 success: true,
 
-                count:
-                    Number(
-                        row.referral_count
-                    ),
+                count,
 
-                totalEarned:
-                    Number(
-                        row.reward_coins
-                    ),
+                totalEarned,
 
                 rewardPerInvite:
+                    referralReward,
+
+
+                /* Compatibility */
+
+                referral_count:
+                    count,
+
+                total_earned:
+                    totalEarned,
+
+                reward_per_invite:
                     referralReward
 
             });
