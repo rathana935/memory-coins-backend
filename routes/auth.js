@@ -5,7 +5,7 @@ import pool from "../db/pool.js";
 
 import {
     validateTelegramInitData
-} from "../services/telegram.js";
+} from "../telegramAuth.js";
 
 import {
     requireAuth
@@ -20,8 +20,8 @@ const router = express.Router();
 ========================================================= */
 
 const DEFAULT_REFERRAL_REWARD = 250;
-
-const DEFAULT_SESSION_DAYS = 30;
+const DEFAULT_SESSION_DAYS = 7;
+const MAX_SESSION_DAYS = 365;
 
 
 /* =========================================================
@@ -53,8 +53,7 @@ function hashToken(token) {
 
 function safeNumber(value, fallback = 0) {
 
-    const number =
-        Number(value);
+    const number = Number(value);
 
     return Number.isFinite(number)
         ? number
@@ -78,9 +77,7 @@ function getReferralCode(telegram) {
 }
 
 
-function getReferrerTelegramId(
-    referralCode
-) {
+function getReferrerTelegramId(referralCode) {
 
     if (
         typeof referralCode !== "string"
@@ -126,9 +123,7 @@ function getReferrerTelegramId(
    REFERRAL REWARD
 ========================================================= */
 
-async function getReferralReward(
-    client
-) {
+async function getReferralReward(client) {
 
     try {
 
@@ -171,6 +166,11 @@ async function getReferralReward(
 
     } catch (error) {
 
+        /*
+         * Referral settings should never prevent
+         * Telegram login from working.
+         */
+
         console.error(
             "Failed to load referral settings:",
             error
@@ -185,25 +185,7 @@ async function getReferralReward(
 
 
 /* =========================================================
-   NORMALIZE USER
-=========================================================
-
-   IMPORTANT
-
-   The database uses snake_case.
-
-   The frontend uses camelCase.
-
-   We return BOTH.
-
-   Example:
-
-   todayCoins
-   today_coins
-
-   gamesPlayed
-   games_played
-
+   USER SERIALIZER
 ========================================================= */
 
 function serializeUser(user) {
@@ -308,21 +290,24 @@ function serializeUser(user) {
     const easyLevel =
         safeNumber(
             user.easy_level ??
-            user.easyLevel
+            user.easyLevel,
+            1
         );
 
 
     const mediumLevel =
         safeNumber(
             user.medium_level ??
-            user.mediumLevel
+            user.mediumLevel,
+            1
         );
 
 
     const hardLevel =
         safeNumber(
             user.hard_level ??
-            user.hardLevel
+            user.hardLevel,
+            1
         );
 
 
@@ -354,11 +339,9 @@ function serializeUser(user) {
 
     return {
 
-        /*
-        =====================================================
-        CANONICAL CAMELCASE API
-        =====================================================
-        */
+        /* =================================================
+           CAMEL CASE
+        ================================================= */
 
         id,
 
@@ -403,11 +386,9 @@ function serializeUser(user) {
         createdAt,
 
 
-        /*
-        =====================================================
-        SNAKE_CASE COMPATIBILITY
-        =====================================================
-        */
+        /* =================================================
+           SNAKE CASE COMPATIBILITY
+        ================================================= */
 
         user_id:
             id,
@@ -528,11 +509,18 @@ router.post(
 
     async (req, res) => {
 
-        const client =
-            await pool.connect();
+        let client;
 
 
         try {
+
+            /* =================================================
+               DATABASE CONNECTION
+            ================================================= */
+
+            client =
+                await pool.connect();
+
 
             /* =================================================
                READ INIT DATA
@@ -643,9 +631,7 @@ router.post(
 
 
             const isNewUser =
-                existingUserResult
-                    .rows
-                    .length === 0;
+                existingUserResult.rows.length === 0;
 
 
             /* =================================================
@@ -664,7 +650,8 @@ router.post(
                         photo_url,
                         language_code,
                         is_premium,
-                        last_seen_at
+                        last_seen_at,
+                        updated_at
                     )
 
                     VALUES
@@ -676,6 +663,7 @@ router.post(
                         $5,
                         $6,
                         $7,
+                        NOW(),
                         NOW()
                     )
 
@@ -704,6 +692,9 @@ router.post(
                             EXCLUDED.is_premium,
 
                         last_seen_at =
+                            NOW(),
+
+                        updated_at =
                             NOW()
 
                     RETURNING
@@ -742,6 +733,15 @@ router.post(
                 userResult.rows[0];
 
 
+            if (!user) {
+
+                throw new Error(
+                    "Unable to create or load user."
+                );
+
+            }
+
+
             /* =================================================
                REFERRAL PROCESSING
             ================================================= */
@@ -757,8 +757,7 @@ router.post(
             if (
                 isNewUser &&
                 referrerTelegramId &&
-                referrerTelegramId !==
-                    telegramId
+                referrerTelegramId !== telegramId
             ) {
 
                 const configuredReward =
@@ -775,20 +774,14 @@ router.post(
                     await client.query(
                         `
                         SELECT
-
                             id,
-
                             telegram_id,
-
-                            coins
-
+                            coins,
+                            today_coins
                         FROM users
-
                         WHERE telegram_id = $1
-
                         FOR UPDATE
                         `,
-
                         [
                             referrerTelegramId
                         ]
@@ -796,8 +789,7 @@ router.post(
 
 
                 if (
-                    referrerResult.rows.length >
-                    0
+                    referrerResult.rows.length > 0
                 ) {
 
                     const referrer =
@@ -805,21 +797,17 @@ router.post(
 
 
                     /* =========================================
-                       PREVENT DUPLICATE REFERRAL
+                       CHECK DUPLICATE REFERRAL
                     ========================================= */
 
                     const existingReferralResult =
                         await client.query(
                             `
                             SELECT id
-
                             FROM referrals
-
                             WHERE referred_user_id = $1
-
                             LIMIT 1
                             `,
-
                             [
                                 user.id
                             ]
@@ -878,23 +866,16 @@ router.post(
 
                                 RETURNING id
                                 `,
-
                                 [
-
                                     referrer.id,
-
                                     user.id,
-
                                     configuredReward
-
                                 ]
                             );
 
 
                         if (
-                            referralResult
-                                .rows
-                                .length > 0
+                            referralResult.rows.length > 0
                         ) {
 
                             const referralId =
@@ -904,7 +885,7 @@ router.post(
 
 
                             /* =================================
-                               ADD REFERRAL COINS
+                               ADD REFERRAL REWARD
                             ================================= */
 
                             await client.query(
@@ -924,13 +905,9 @@ router.post(
 
                                 WHERE id = $2
                                 `,
-
                                 [
-
                                     configuredReward,
-
                                     referrer.id
-
                                 ]
                             );
 
@@ -963,7 +940,6 @@ router.post(
                                     $7
                                 )
                                 `,
-
                                 [
 
                                     referrer.id,
@@ -1014,8 +990,9 @@ router.post(
                     FROM users
 
                     WHERE id = $1
-                    `,
 
+                    LIMIT 1
+                    `,
                     [
                         user.id
                     ]
@@ -1023,8 +1000,7 @@ router.post(
 
 
             const finalUser =
-                refreshedUserResult
-                    .rows[0];
+                refreshedUserResult.rows[0];
 
 
             if (!finalUser) {
@@ -1037,18 +1013,8 @@ router.post(
 
 
             /* =================================================
-               CREATE SESSION
+               SESSION CONFIG
             ================================================= */
-
-            const sessionToken =
-                generateSessionToken();
-
-
-            const tokenHash =
-                hashToken(
-                    sessionToken
-                );
-
 
             let sessionDays =
                 Number(
@@ -1058,9 +1024,7 @@ router.post(
 
 
             if (
-                !Number.isFinite(
-                    sessionDays
-                ) ||
+                !Number.isFinite(sessionDays) ||
                 sessionDays <= 0
             ) {
 
@@ -1072,8 +1036,22 @@ router.post(
 
             sessionDays =
                 Math.min(
-                    sessionDays,
-                    365
+                    Math.floor(sessionDays),
+                    MAX_SESSION_DAYS
+                );
+
+
+            /* =================================================
+               CREATE SESSION TOKEN
+            ================================================= */
+
+            const sessionToken =
+                generateSessionToken();
+
+
+            const tokenHash =
+                hashToken(
+                    sessionToken
                 );
 
 
@@ -1102,7 +1080,6 @@ router.post(
                     $5
                 )
                 `,
-
                 [
 
                     finalUser.id,
@@ -1111,18 +1088,18 @@ router.post(
 
                     sessionDays,
 
-                    req.headers[
-                        "user-agent"
-                    ] || null,
+                    req.headers["user-agent"] ||
+                        null,
 
-                    req.ip || null
+                    req.ip ||
+                        null
 
                 ]
             );
 
 
             /* =================================================
-               DELETE EXPIRED SESSIONS
+               DELETE OLD / EXPIRED SESSIONS
             ================================================= */
 
             await client.query(
@@ -1133,7 +1110,6 @@ router.post(
 
                   AND expires_at < NOW()
                 `,
-
                 [
                     finalUser.id
                 ]
@@ -1160,7 +1136,7 @@ router.post(
 
 
             /* =================================================
-               SUCCESS RESPONSE
+               SUCCESS
             ================================================= */
 
             return res.json({
@@ -1173,14 +1149,14 @@ router.post(
                 accessToken:
                     sessionToken,
 
+                tokenType:
+                    "Bearer",
+
                 expiresIn:
                     sessionDays *
                     24 *
                     60 *
                     60,
-
-                tokenType:
-                    "Bearer",
 
                 referral: {
 
@@ -1207,20 +1183,22 @@ router.post(
                ROLLBACK
             ================================================= */
 
-            try {
+            if (client) {
 
-                await client.query(
-                    "ROLLBACK"
-                );
+                try {
 
-            } catch (
-                rollbackError
-            ) {
+                    await client.query(
+                        "ROLLBACK"
+                    );
 
-                console.error(
-                    "Authentication rollback error:",
-                    rollbackError
-                );
+                } catch (rollbackError) {
+
+                    console.error(
+                        "Authentication rollback error:",
+                        rollbackError
+                    );
+
+                }
 
             }
 
@@ -1231,9 +1209,17 @@ router.post(
             );
 
 
+            /*
+             * Telegram validation errors normally come from
+             * validateTelegramInitData().
+             */
+
             const statusCode =
-                error.statusCode ||
-                401;
+                Number.isInteger(
+                    error?.statusCode
+                )
+                    ? error.statusCode
+                    : 401;
 
 
             return res.status(
@@ -1243,15 +1229,18 @@ router.post(
                 success: false,
 
                 error:
-                    error.message ||
+                    error?.message ||
                     "Telegram authentication failed"
 
             });
 
-
         } finally {
 
-            client.release();
+            if (client) {
+
+                client.release();
+
+            }
 
         }
 
@@ -1272,21 +1261,23 @@ router.get(
 
         try {
 
-            /*
-            -------------------------------------------------
-            IMPORTANT
-            -------------------------------------------------
-
-            Do not rely only on req.user.
-
-            Refresh the user from PostgreSQL so the frontend
-            receives the latest balance/statistics.
-            -------------------------------------------------
-            */
-
             const userId =
                 req.user.user_id ||
                 req.user.id;
+
+
+            if (!userId) {
+
+                return res.status(401).json({
+
+                    success: false,
+
+                    error:
+                        "Authenticated user ID is missing."
+
+                });
+
+            }
 
 
             const result =
@@ -1302,7 +1293,6 @@ router.get(
 
                     LIMIT 1
                     `,
-
                     [
                         userId
                     ]
@@ -1381,10 +1371,8 @@ router.post(
 
 
             if (
-                !header ||
-                !header.startsWith(
-                    "Bearer "
-                )
+                typeof header !== "string" ||
+                !header.startsWith("Bearer ")
             ) {
 
                 return res.status(401).json({
@@ -1431,7 +1419,6 @@ router.post(
 
                 WHERE token_hash = $1
                 `,
-
                 [
                     tokenHash
                 ]
@@ -1461,7 +1448,7 @@ router.post(
                 success: false,
 
                 error:
-                    "Logout failed"
+                    "Logout failed."
 
             });
 
@@ -1470,5 +1457,9 @@ router.post(
     }
 );
 
+
+/* =========================================================
+   EXPORT
+========================================================= */
 
 export default router;
