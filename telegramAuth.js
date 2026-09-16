@@ -17,30 +17,14 @@ const MAX_AUTH_AGE_SECONDS = Number(
 
 if (!TELEGRAM_BOT_TOKEN) {
     console.warn(
-        "WARNING: TELEGRAM_BOT_TOKEN is not set."
+        "WARNING: TELEGRAM_BOT_TOKEN is not configured."
     );
 }
 
 
 /* =========================================================
-   HELPERS
+   CREATE DATA CHECK STRING
 ========================================================= */
-
-function parseInitData(initData) {
-    const params = new URLSearchParams(initData);
-
-    const data = {};
-
-    for (const [key, value] of params.entries()) {
-        data[key] = value;
-    }
-
-    return {
-        params,
-        data
-    };
-}
-
 
 function createDataCheckString(params) {
     return [...params.entries()]
@@ -51,16 +35,45 @@ function createDataCheckString(params) {
 }
 
 
+/* =========================================================
+   CREATE TELEGRAM SECRET KEY
+========================================================= */
+
+/*
+   Telegram Mini App validation:
+
+   secret_key =
+   HMAC-SHA256(
+       key = "WebAppData",
+       message = BOT_TOKEN
+   )
+*/
+
 function createTelegramSecretKey() {
     return crypto
-        .createHash("sha256")
+        .createHmac("sha256", "WebAppData")
         .update(TELEGRAM_BOT_TOKEN)
         .digest();
 }
 
 
+/* =========================================================
+   SAFE HASH COMPARISON
+========================================================= */
+
 function safeCompareHex(a, b) {
-    if (!a || !b) {
+    if (
+        typeof a !== "string" ||
+        typeof b !== "string"
+    ) {
+        return false;
+    }
+
+    if (!/^[0-9a-fA-F]+$/.test(a)) {
+        return false;
+    }
+
+    if (!/^[0-9a-fA-F]+$/.test(b)) {
         return false;
     }
 
@@ -71,15 +84,19 @@ function safeCompareHex(a, b) {
         return false;
     }
 
-    return crypto.timingSafeEqual(aBuffer, bBuffer);
+    return crypto.timingSafeEqual(
+        aBuffer,
+        bBuffer
+    );
 }
 
 
 /* =========================================================
-   MAIN VALIDATION
+   VALIDATE TELEGRAM INIT DATA
 ========================================================= */
 
 export function validateTelegramInitData(initData) {
+
     if (!TELEGRAM_BOT_TOKEN) {
         const error = new Error(
             "TELEGRAM_BOT_TOKEN is not configured."
@@ -89,6 +106,7 @@ export function validateTelegramInitData(initData) {
 
         throw error;
     }
+
 
     if (
         typeof initData !== "string" ||
@@ -103,9 +121,15 @@ export function validateTelegramInitData(initData) {
         throw error;
     }
 
-    const { params, data } = parseInitData(initData);
 
-    const receivedHash = params.get("hash");
+    /* -----------------------------------------------------
+       Parse initData
+    ----------------------------------------------------- */
+
+    const params = new URLSearchParams(initData);
+
+    const receivedHash =
+        params.get("hash");
 
     if (!receivedHash) {
         const error = new Error(
@@ -119,20 +143,33 @@ export function validateTelegramInitData(initData) {
 
 
     /* -----------------------------------------------------
-       Validate hash
+       Build data-check-string
     ----------------------------------------------------- */
 
     const dataCheckString =
         createDataCheckString(params);
+
+
+    /* -----------------------------------------------------
+       Calculate expected hash
+    ----------------------------------------------------- */
 
     const secretKey =
         createTelegramSecretKey();
 
     const calculatedHash =
         crypto
-            .createHmac("sha256", secretKey)
+            .createHmac(
+                "sha256",
+                secretKey
+            )
             .update(dataCheckString)
             .digest("hex");
+
+
+    /* -----------------------------------------------------
+       Compare hashes
+    ----------------------------------------------------- */
 
     if (
         !safeCompareHex(
@@ -154,9 +191,8 @@ export function validateTelegramInitData(initData) {
        Validate auth_date
     ----------------------------------------------------- */
 
-    const authDate = Number(
-        params.get("auth_date")
-    );
+    const authDate =
+        Number(params.get("auth_date"));
 
     if (
         !Number.isInteger(authDate) ||
@@ -171,11 +207,13 @@ export function validateTelegramInitData(initData) {
         throw error;
     }
 
-    const now = Math.floor(
-        Date.now() / 1000
-    );
 
-    const age = now - authDate;
+    const now =
+        Math.floor(Date.now() / 1000);
+
+    const age =
+        now - authDate;
+
 
     if (
         age < 0 ||
@@ -192,10 +230,11 @@ export function validateTelegramInitData(initData) {
 
 
     /* -----------------------------------------------------
-       Parse Telegram user
+       Get Telegram user
     ----------------------------------------------------- */
 
-    const userRaw = params.get("user");
+    const userRaw =
+        params.get("user");
 
     if (!userRaw) {
         const error = new Error(
@@ -206,6 +245,7 @@ export function validateTelegramInitData(initData) {
 
         throw error;
     }
+
 
     let user;
 
@@ -237,7 +277,8 @@ export function validateTelegramInitData(initData) {
             "Invalid Telegram user ID."
         );
 
-        error.code = "INVALID_TELEGRAM_USER_ID";
+        error.code =
+            "INVALID_TELEGRAM_USER_ID";
 
         throw error;
     }
