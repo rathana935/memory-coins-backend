@@ -1,6 +1,4 @@
-/* ============================================================
-   WITHDRAWALS
-============================================================ */
+/* ============================================================ WITHDRAWALS ============================================================ */
 
 CREATE TABLE IF NOT EXISTS withdrawals (
 
@@ -69,9 +67,7 @@ CREATE INDEX IF NOT EXISTS idx_withdrawals_created
 ON withdrawals(requested_at DESC);
 
 
-/*
-   Prevent more than one active withdrawal per user.
-*/
+/* Prevent more than one active withdrawal per user. */
 
 CREATE UNIQUE INDEX IF NOT EXISTS
 idx_one_active_withdrawal_per_user
