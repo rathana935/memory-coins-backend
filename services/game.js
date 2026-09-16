@@ -1,318 +1,605 @@
-// services/game.js
+// =========================================================
+// COMPLETE GAME
+// =========================================================
 
-import crypto from "crypto";
-import pool from "../db/pool.js";
-
-/* =========================================================
-   GAME CONFIGURATION
-========================================================= */
-
-const GAME_CONFIG = {
-  easy: {
-    rows: 4,
-    cols: 4,
-    pairs: 8,
-    reward: 10,
-    maxGames: 100,
-  },
-
-  hard: {
-    rows: 4,
-    cols: 6,
-    pairs: 12,
-    reward: 12,
-    maxGames: 100,
-  },
-
-  difficult: {
-    rows: 6,
-    cols: 6,
-    pairs: 18,
-    reward: 15,
-    maxGames: 100,
-  },
-};
-
-/* =========================================================
-   LIFE CONFIGURATION
-========================================================= */
-
-const MAX_LIVES = 5;
-const LIFE_COOLDOWN_SECONDS = 60 * 60;
-
-/* =========================================================
-   CARD SYMBOLS
-========================================================= */
-
-const CARD_SYMBOLS = [
-  "🍎",
-  "🍌",
-  "🍇",
-  "🍉",
-  "🍓",
-  "🍒",
-  "🥝",
-  "🍍",
-  "🥭",
-  "🍑",
-  "🍊",
-  "🍋",
-  "🥥",
-  "🍈",
-  "🍏",
-  "🫐",
-  "🌽",
-  "🥦",
-];
-
-/* =========================================================
-   BASIC VALIDATION
-========================================================= */
-
-function isValidDifficulty(difficulty) {
-  return Object.prototype.hasOwnProperty.call(
-    GAME_CONFIG,
-    difficulty
-  );
-}
-
-function getConfig(difficulty) {
-  if (!isValidDifficulty(difficulty)) {
-    const error = new Error("Invalid game difficulty.");
-    error.code = "INVALID_GAME_DIFFICULTY";
-    throw error;
+export async function completeGame(
+  userId,
+  {
+    gameId,
+    completionToken,
+    difficulty,
+    moves,
+    duration,
+    matchedPairs,
+    matchedIndexes,
   }
+) {
+  const client = await pool.connect();
 
-  return GAME_CONFIG[difficulty];
-}
+  try {
+    await client.query("BEGIN");
 
-function createToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
+    /* -------------------------------------------------------
+       Lock the game session
+    ------------------------------------------------------- */
 
-/* =========================================================
-   SECURE SHUFFLE
-========================================================= */
+    const gameResult = await client.query(
+      `
+      SELECT
+        id,
+        user_id,
+        difficulty,
+        level,
+        rows,
+        cols,
+        pairs,
+        reward,
+        puzzle,
+        puzzle_hash,
+        completion_token,
+        started_at,
+        expires_at,
+        completed_at
+      FROM game_sessions
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [gameId]
+    );
 
-function secureShuffle(array) {
-  const result = [...array];
-
-  for (let i = result.length - 1; i > 0; i--) {
-    const random = crypto.randomInt(0, i + 1);
-
-    const temp = result[i];
-    result[i] = result[random];
-    result[random] = temp;
-  }
-
-  return result;
-}
-
-/* =========================================================
-   GENERATE PUZZLE
-========================================================= */
-
-function generatePuzzle(pairCount) {
-  if (
-    !Number.isInteger(pairCount) ||
-    pairCount < 1 ||
-    pairCount > CARD_SYMBOLS.length
-  ) {
-    const error = new Error("Invalid pair count.");
-    error.code = "INVALID_PAIR_COUNT";
-    throw error;
-  }
-
-  const selectedSymbols = CARD_SYMBOLS.slice(0, pairCount);
-
-  const cards = [];
-
-  for (const symbol of selectedSymbols) {
-    cards.push(symbol);
-    cards.push(symbol);
-  }
-
-  return secureShuffle(cards);
-}
-
-/* =========================================================
-   PUZZLE HASH
-========================================================= */
-
-function hashPuzzle(cards) {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(cards))
-    .digest("hex");
-}
-
-/* =========================================================
-   CREATE PUZZLE DATA
-========================================================= */
-
-function createPuzzleData(difficulty) {
-  const config = getConfig(difficulty);
-
-  const cards = generatePuzzle(config.pairs);
-
-  return {
-    cards,
-    puzzleHash: hashPuzzle(cards),
-    rows: config.rows,
-    cols: config.cols,
-    pairs: config.pairs,
-  };
-}
-
-/* =========================================================
-   VERIFY PUZZLE SOLUTION
-========================================================= */
-
-function verifyPuzzleSolution({
-  cards,
-  matchedIndexes,
-  matchedPairs,
-}) {
-  if (!Array.isArray(cards)) {
-    return false;
-  }
-
-  if (!Array.isArray(matchedIndexes)) {
-    return false;
-  }
-
-  if (!Number.isInteger(matchedPairs)) {
-    return false;
-  }
-
-  const expectedPairs = cards.length / 2;
-
-  if (cards.length === 0 || cards.length % 2 !== 0) {
-    return false;
-  }
-
-  if (matchedPairs !== expectedPairs) {
-    return false;
-  }
-
-  if (matchedIndexes.length !== cards.length) {
-    return false;
-  }
-
-  const uniqueIndexes = new Set(matchedIndexes);
-
-  if (uniqueIndexes.size !== cards.length) {
-    return false;
-  }
-
-  for (let i = 0; i < cards.length; i++) {
-    if (!uniqueIndexes.has(i)) {
-      return false;
+    if (gameResult.rowCount === 0) {
+      const error = new Error("Game not found.");
+      error.code = "GAME_NOT_FOUND";
+      throw error;
     }
-  }
 
-  for (let i = 0; i < cards.length; i += 2) {
-    const firstIndex = matchedIndexes[i];
-    const secondIndex = matchedIndexes[i + 1];
+    const game = gameResult.rows[0];
 
-    if (cards[firstIndex] !== cards[secondIndex]) {
-      return false;
+    /* -------------------------------------------------------
+       Verify ownership
+    ------------------------------------------------------- */
+
+    if (String(game.user_id) !== String(userId)) {
+      const error = new Error("Invalid game session.");
+      error.code = "INVALID_GAME_SESSION";
+      throw error;
     }
-  }
 
-  return true;
+    /* -------------------------------------------------------
+       Verify difficulty
+    ------------------------------------------------------- */
+
+    if (!isValidDifficulty(game.difficulty)) {
+      const error = new Error("Invalid game difficulty.");
+      error.code = "INVALID_GAME_DIFFICULTY";
+      throw error;
+    }
+
+    if (game.difficulty !== difficulty) {
+      const error = new Error("Invalid game difficulty.");
+      error.code = "INVALID_GAME_DIFFICULTY";
+      throw error;
+    }
+
+    const config = getConfig(difficulty);
+
+    /* -------------------------------------------------------
+       Verify completion token
+    ------------------------------------------------------- */
+
+    if (
+      typeof completionToken !== "string" ||
+      completionToken !== game.completion_token
+    ) {
+      const error = new Error(
+        "Invalid completion token."
+      );
+      error.code = "INVALID_COMPLETION_TOKEN";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Prevent duplicate completion
+    ------------------------------------------------------- */
+
+    if (game.completed_at) {
+      const error = new Error(
+        "Game already completed."
+      );
+      error.code = "GAME_ALREADY_COMPLETED";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Check expiration
+    ------------------------------------------------------- */
+
+    const expiresAt =
+      new Date(game.expires_at).getTime();
+
+    if (
+      !Number.isFinite(expiresAt) ||
+      Date.now() > expiresAt
+    ) {
+      const error = new Error(
+        "Game has expired."
+      );
+      error.code = "GAME_EXPIRED";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify stored puzzle
+    ------------------------------------------------------- */
+
+    let cards;
+
+    try {
+      cards =
+        typeof game.puzzle === "string"
+          ? JSON.parse(game.puzzle)
+          : game.puzzle;
+    } catch {
+      const error = new Error(
+        "Invalid stored puzzle."
+      );
+      error.code = "INVALID_PUZZLE";
+      throw error;
+    }
+
+    if (!Array.isArray(cards)) {
+      const error = new Error(
+        "Invalid stored puzzle."
+      );
+      error.code = "INVALID_PUZZLE";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify puzzle hash
+    ------------------------------------------------------- */
+
+    const calculatedHash = hashPuzzle(cards);
+
+    if (
+      calculatedHash !== game.puzzle_hash
+    ) {
+      const error = new Error(
+        "Puzzle integrity check failed."
+      );
+      error.code = "INVALID_PUZZLE";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify board dimensions
+    ------------------------------------------------------- */
+
+    if (
+      Number(game.rows) !== config.rows ||
+      Number(game.cols) !== config.cols ||
+      Number(game.pairs) !== config.pairs ||
+      cards.length !== config.rows * config.cols
+    ) {
+      const error = new Error(
+        "Game configuration does not match."
+      );
+      error.code = "INVALID_GAME_SESSION";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify matched pair count
+    ------------------------------------------------------- */
+
+    if (
+      !Number.isInteger(matchedPairs) ||
+      matchedPairs !== config.pairs
+    ) {
+      const error = new Error(
+        "Invalid matched pairs."
+      );
+      error.code = "INVALID_MATCHED_PAIRS";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify puzzle solution
+    ------------------------------------------------------- */
+
+    const solved = verifyPuzzleSolution({
+      cards,
+      matchedIndexes,
+      matchedPairs,
+    });
+
+    if (!solved) {
+      const error = new Error(
+        "Puzzle was not correctly solved."
+      );
+      error.code = "PUZZLE_NOT_COMPLETED";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify duration against server time
+    ------------------------------------------------------- */
+
+    const startedAt =
+      new Date(game.started_at).getTime();
+
+    if (!Number.isFinite(startedAt)) {
+      const error = new Error(
+        "Invalid game start time."
+      );
+      error.code = "INVALID_GAME_START_TIME";
+      throw error;
+    }
+
+    const serverDurationSeconds = Math.floor(
+      (Date.now() - startedAt) / 1000
+    );
+
+    /*
+      Allow some clock/network tolerance.
+
+      The client duration is never trusted for rewards.
+    */
+
+    const minimumDuration = Math.max(
+      1,
+      serverDurationSeconds - 15
+    );
+
+    if (duration < minimumDuration) {
+      const error = new Error(
+        "Invalid game duration."
+      );
+      error.code = "INVALID_GAME_DURATION";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Verify level
+    ------------------------------------------------------- */
+
+    const level = Number(game.level);
+
+    if (
+      !Number.isInteger(level) ||
+      level < 1 ||
+      level > config.maxGames
+    ) {
+      const error = new Error(
+        "Invalid game level."
+      );
+      error.code = "INVALID_GAME_LEVEL";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Lock user
+    ------------------------------------------------------- */
+
+    const userResult = await client.query(
+      `
+      SELECT
+        id,
+        coins,
+        lives,
+        easy_level,
+        medium_level,
+        hard_level,
+        easy_games,
+        medium_games,
+        hard_games
+      FROM users
+      WHERE id = $1
+      FOR UPDATE
+      `,
+      [userId]
+    );
+
+    if (userResult.rowCount === 0) {
+      const error = new Error(
+        "User not found."
+      );
+      error.code = "USER_NOT_FOUND";
+      throw error;
+    }
+
+    const user = userResult.rows[0];
+
+    /* -------------------------------------------------------
+       Determine user's current level
+    ------------------------------------------------------- */
+
+    let currentLevel;
+    let currentGames;
+
+    if (difficulty === "easy") {
+      currentLevel = Number(
+        user.easy_level ?? 1
+      );
+
+      currentGames = Number(
+        user.easy_games ?? 0
+      );
+    } else if (difficulty === "hard") {
+      /*
+        Public "hard" uses the existing medium DB columns.
+      */
+
+      currentLevel = Number(
+        user.medium_level ?? 1
+      );
+
+      currentGames = Number(
+        user.medium_games ?? 0
+      );
+    } else {
+      /*
+        Public "difficult" uses the existing hard DB columns.
+      */
+
+      currentLevel = Number(
+        user.hard_level ?? 1
+      );
+
+      currentGames = Number(
+        user.hard_games ?? 0
+      );
+    }
+
+    /* -------------------------------------------------------
+       Make sure this is the currently unlocked level
+    ------------------------------------------------------- */
+
+    if (level !== currentLevel) {
+      const error = new Error(
+        "Level is not currently unlocked."
+      );
+      error.code = "LEVEL_NOT_UNLOCKED";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Calculate server-side reward
+       
+       Easy      = +10
+       Hard      = +12
+       Difficult = +15
+    ------------------------------------------------------- */
+
+    const reward = config.reward;
+
+    const currentCoins =
+      Number(user.coins ?? 0);
+
+    const newCoins =
+      currentCoins + reward;
+
+    /* -------------------------------------------------------
+       Update difficulty progress
+    ------------------------------------------------------- */
+
+    let updateQuery;
+    let updateParams;
+
+    if (difficulty === "easy") {
+      updateQuery = `
+        UPDATE users
+        SET
+          coins = $1,
+          easy_games = easy_games + 1,
+          easy_level = LEAST(
+            easy_level + 1,
+            $2
+          )
+        WHERE id = $3
+        RETURNING
+          coins,
+          lives,
+          easy_level,
+          easy_games,
+          medium_level,
+          medium_games,
+          hard_level,
+          hard_games
+      `;
+
+      updateParams = [
+        newCoins,
+        config.maxGames + 1,
+        userId,
+      ];
+    } else if (difficulty === "hard") {
+      updateQuery = `
+        UPDATE users
+        SET
+          coins = $1,
+          medium_games = medium_games + 1,
+          medium_level = LEAST(
+            medium_level + 1,
+            $2
+          )
+        WHERE id = $3
+        RETURNING
+          coins,
+          lives,
+          easy_level,
+          easy_games,
+          medium_level,
+          medium_games,
+          hard_level,
+          hard_games
+      `;
+
+      updateParams = [
+        newCoins,
+        config.maxGames + 1,
+        userId,
+      ];
+    } else {
+      updateQuery = `
+        UPDATE users
+        SET
+          coins = $1,
+          hard_games = hard_games + 1,
+          hard_level = LEAST(
+            hard_level + 1,
+            $2
+          )
+        WHERE id = $3
+        RETURNING
+          coins,
+          lives,
+          easy_level,
+          easy_games,
+          medium_level,
+          medium_games,
+          hard_level,
+          hard_games
+      `;
+
+      updateParams = [
+        newCoins,
+        config.maxGames + 1,
+        userId,
+      ];
+    }
+
+    const updatedUser =
+      await client.query(
+        updateQuery,
+        updateParams
+      );
+
+    if (updatedUser.rowCount === 0) {
+      const error = new Error(
+        "Unable to update user."
+      );
+      error.code = "USER_UPDATE_FAILED";
+      throw error;
+    }
+
+    /* -------------------------------------------------------
+       Mark game completed
+    ------------------------------------------------------- */
+
+    await client.query(
+      `
+      UPDATE game_sessions
+      SET
+        completed_at = NOW(),
+        moves = $1,
+        duration_seconds = $2,
+        matched_pairs = $3
+      WHERE id = $4
+      `,
+      [
+        moves,
+        duration,
+        matchedPairs,
+        gameId,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    const resultUser =
+      updatedUser.rows[0];
+
+    /* -------------------------------------------------------
+       Determine next level
+    ------------------------------------------------------- */
+
+    let nextLevel;
+
+    if (difficulty === "easy") {
+      nextLevel = Number(
+        resultUser.easy_level
+      );
+    } else if (difficulty === "hard") {
+      nextLevel = Number(
+        resultUser.medium_level
+      );
+    } else {
+      nextLevel = Number(
+        resultUser.hard_level
+      );
+    }
+
+    const completedAllLevels =
+      level >= config.maxGames;
+
+    /*
+      The frontend can show "Next Level" when there
+      is another level available.
+
+      If level 100 is completed, there is no level 101.
+    */
+
+    return {
+      success: true,
+
+      gameId,
+
+      difficulty,
+
+      completedLevel: level,
+
+      nextLevel: completedAllLevels
+        ? null
+        : nextLevel,
+
+      completedAllLevels,
+
+      reward,
+
+      coins: Number(
+        resultUser.coins
+      ),
+
+      lives: Number(
+        resultUser.lives ?? 0
+      ),
+
+      /*
+        Double Reward remains available for the
+        separate AdsGram reward flow.
+      */
+
+      doubleRewardAvailable: true,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /* =========================================================
-   LIFE RECOVERY
+   GAME STATUS
 ========================================================= */
 
-function calculateRecoveredLives(lives, lastLifeAt) {
-  let currentLives = Number(lives ?? 0);
-
-  if (currentLives >= MAX_LIVES) {
-    return {
-      lives: MAX_LIVES,
-      recovered: 0,
-      nextLifeAt: null,
-    };
-  }
-
-  if (!lastLifeAt) {
-    return {
-      lives: currentLives,
-      recovered: 0,
-      nextLifeAt: null,
-    };
-  }
-
-  const lastTime = new Date(lastLifeAt).getTime();
-  const now = Date.now();
-
-  if (!Number.isFinite(lastTime)) {
-    return {
-      lives: currentLives,
-      recovered: 0,
-      nextLifeAt: null,
-    };
-  }
-
-  const elapsedSeconds = Math.floor(
-    (now - lastTime) / 1000
-  );
-
-  if (elapsedSeconds < LIFE_COOLDOWN_SECONDS) {
-    return {
-      lives: currentLives,
-      recovered: 0,
-      nextLifeAt:
-        new Date(
-          lastTime + LIFE_COOLDOWN_SECONDS * 1000
-        ).toISOString(),
-    };
-  }
-
-  const recovered = Math.min(
-    MAX_LIVES - currentLives,
-    Math.floor(
-      elapsedSeconds / LIFE_COOLDOWN_SECONDS
-    )
-  );
-
-  currentLives += recovered;
-
-  if (currentLives >= MAX_LIVES) {
-    return {
-      lives: MAX_LIVES,
-      recovered,
-      nextLifeAt: null,
-    };
-  }
-
-  const remainingSeconds =
-    LIFE_COOLDOWN_SECONDS -
-    (elapsedSeconds % LIFE_COOLDOWN_SECONDS);
-
-  return {
-    lives: currentLives,
-    recovered,
-    nextLifeAt: new Date(
-      now + remainingSeconds * 1000
-    ).toISOString(),
-  };
-}
-
-/* =========================================================
-   UPDATE / RECOVER USER LIVES
-========================================================= */
-
-async function refreshUserLives(userId) {
-  const result = await pool.query(
+export async function getGameStatus(userId) {
+  const userResult = await pool.query(
     `
     SELECT
-      id,
+      coins,
       lives,
-      last_life_at
+      last_life_at,
+
+      easy_level,
+      easy_games,
+
+      medium_level,
+      medium_games,
+
+      hard_level,
+      hard_games
     FROM users
     WHERE id = $1
     LIMIT 1
@@ -320,21 +607,29 @@ async function refreshUserLives(userId) {
     [userId]
   );
 
-  if (result.rowCount === 0) {
-    const error = new Error("User not found.");
+  if (userResult.rowCount === 0) {
+    const error = new Error(
+      "User not found."
+    );
     error.code = "USER_NOT_FOUND";
     throw error;
   }
 
-  const user = result.rows[0];
+  const user = userResult.rows[0];
 
-  const recovery = calculateRecoveredLives(
-    user.lives,
-    user.last_life_at
-  );
+  /* -------------------------------------------------------
+     Recover lives
+  ------------------------------------------------------- */
+
+  const recovery =
+    calculateRecoveredLives(
+      user.lives,
+      user.last_life_at
+    );
 
   if (recovery.recovered > 0) {
-    let newLastLifeAt = user.last_life_at;
+    let newLastLifeAt =
+      user.last_life_at;
 
     if (recovery.lives >= MAX_LIVES) {
       newLastLifeAt = null;
@@ -358,352 +653,82 @@ async function refreshUserLives(userId) {
     );
   }
 
+  /* -------------------------------------------------------
+     Return public game status
+     
+     IMPORTANT:
+     No "medium" is exposed to frontend.
+  ------------------------------------------------------- */
+
   return {
+    coins: Number(
+      user.coins ?? 0
+    ),
+
     lives: recovery.lives,
-    nextLifeAt: recovery.nextLifeAt,
+
+    nextLifeAt:
+      recovery.nextLifeAt,
+
+    maxLives: MAX_LIVES,
+
+    lifeCooldownSeconds:
+      LIFE_COOLDOWN_SECONDS,
+
+    games: {
+      easy: {
+        level: Number(
+          user.easy_level ?? 1
+        ),
+        completed: Number(
+          user.easy_games ?? 0
+        ),
+        maxLevels: 100,
+        rows: 4,
+        cols: 4,
+        pairs: 8,
+        reward: 10,
+      },
+
+      hard: {
+        level: Number(
+          user.medium_level ?? 1
+        ),
+        completed: Number(
+          user.medium_games ?? 0
+        ),
+        maxLevels: 100,
+        rows: 4,
+        cols: 6,
+        pairs: 12,
+        reward: 12,
+      },
+
+      difficult: {
+        level: Number(
+          user.hard_level ?? 1
+        ),
+        completed: Number(
+          user.hard_games ?? 0
+        ),
+        maxLevels: 100,
+        rows: 6,
+        cols: 6,
+        pairs: 18,
+        reward: 15,
+      },
+    },
   };
 }
 
 /* =========================================================
-   GET USER PROGRESS
+   EXPORT CONFIG
 ========================================================= */
 
-async function getUserProgress(userId) {
-  const result = await pool.query(
-    `
-    SELECT
-      easy_level,
-      medium_level,
-      hard_level,
-      easy_games,
-      medium_games,
-      hard_games
-    FROM users
-    WHERE id = $1
-    LIMIT 1
-    `,
-    [userId]
-  );
-
-  if (result.rowCount === 0) {
-    const error = new Error("User not found.");
-    error.code = "USER_NOT_FOUND";
-    throw error;
-  }
-
-  const user = result.rows[0];
-
-  return {
-    easy: {
-      level: Number(user.easy_level ?? 1),
-      games: Number(user.easy_games ?? 0),
-    },
-
-    hard: {
-      level: Number(user.medium_level ?? 1),
-      games: Number(user.medium_games ?? 0),
-    },
-
-    difficult: {
-      level: Number(user.hard_level ?? 1),
-      games: Number(user.hard_games ?? 0),
-    },
-  };
-}
-
-/* =========================================================
-   START GAME
-========================================================= */
-
-export async function startGame(userId, difficulty) {
-  const config = getConfig(difficulty);
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const userResult = await client.query(
-      `
-      SELECT
-        id,
-        lives,
-        last_life_at,
-        easy_level,
-        medium_level,
-        hard_level,
-        easy_games,
-        medium_games,
-        hard_games
-      FROM users
-      WHERE id = $1
-      FOR UPDATE
-      `,
-      [userId]
-    );
-
-    if (userResult.rowCount === 0) {
-      const error = new Error("User not found.");
-      error.code = "USER_NOT_FOUND";
-      throw error;
-    }
-
-    const user = userResult.rows[0];
-
-    /* -------------------------------------------------------
-       Recover lives before starting
-    ------------------------------------------------------- */
-
-    const recovery = calculateRecoveredLives(
-      user.lives,
-      user.last_life_at
-    );
-
-    let lives = recovery.lives;
-    let lastLifeAt = user.last_life_at;
-
-    if (recovery.recovered > 0) {
-      if (lives >= MAX_LIVES) {
-        lastLifeAt = null;
-      } else {
-        lastLifeAt = new Date();
-      }
-
-      await client.query(
-        `
-        UPDATE users
-        SET
-          lives = $1,
-          last_life_at = $2
-        WHERE id = $3
-        `,
-        [
-          lives,
-          lastLifeAt,
-          userId,
-        ]
-      );
-    }
-
-    /* -------------------------------------------------------
-       Check lives
-    ------------------------------------------------------- */
-
-    if (lives <= 0) {
-      const error = new Error(
-        "No lives remaining."
-      );
-      error.code = "NO_LIVES";
-      throw error;
-    }
-
-    /* -------------------------------------------------------
-       Determine current level
-       
-       Public:
-         easy      -> easy_level
-         hard      -> medium_level
-         difficult -> hard_level
-    ------------------------------------------------------- */
-
-    let currentLevel;
-
-    if (difficulty === "easy") {
-      currentLevel = Number(
-        user.easy_level ?? 1
-      );
-    } else if (difficulty === "hard") {
-      currentLevel = Number(
-        user.medium_level ?? 1
-      );
-    } else {
-      currentLevel = Number(
-        user.hard_level ?? 1
-      );
-    }
-
-    /* -------------------------------------------------------
-       Check 100-level limit
-    ------------------------------------------------------- */
-
-    if (currentLevel > config.maxGames) {
-      const error = new Error(
-        "Maximum level reached."
-      );
-      error.code = "MAX_LEVEL_REACHED";
-      throw error;
-    }
-
-    /* -------------------------------------------------------
-       Prevent multiple active games
-    ------------------------------------------------------- */
-
-    const activeGame = await client.query(
-      `
-      SELECT id
-      FROM game_sessions
-      WHERE
-        user_id = $1
-        AND completed_at IS NULL
-        AND expires_at > NOW()
-      LIMIT 1
-      `,
-      [userId]
-    );
-
-    if (activeGame.rowCount > 0) {
-      const error = new Error(
-        "Game already active."
-      );
-      error.code = "GAME_ALREADY_ACTIVE";
-      throw error;
-    }
-
-    /* -------------------------------------------------------
-       Generate server-side puzzle
-    ------------------------------------------------------- */
-
-    const puzzle = createPuzzleData(
-      difficulty
-    );
-
-    const gameId = crypto.randomUUID();
-
-    const completionToken = createToken();
-
-    const expiresAt = new Date(
-      Date.now() + 15 * 60 * 1000
-    );
-
-    /* -------------------------------------------------------
-       Consume one life
-    ------------------------------------------------------- */
-
-    const newLives = lives - 1;
-
-    /*
-      If the player was at MAX_LIVES and starts a game,
-      begin the 1-hour recovery timer.
-
-      If a timer is already running, keep it.
-    */
-
-    if (
-      newLives < MAX_LIVES &&
-      !lastLifeAt
-    ) {
-      lastLifeAt = new Date();
-    }
-
-    await client.query(
-      `
-      UPDATE users
-      SET
-        lives = $1,
-        last_life_at = $2
-      WHERE id = $3
-      `,
-      [
-        newLives,
-        lastLifeAt,
-        userId,
-      ]
-    );
-
-    /* -------------------------------------------------------
-       Save game session
-    ------------------------------------------------------- */
-
-    await client.query(
-      `
-      INSERT INTO game_sessions (
-        id,
-        user_id,
-        difficulty,
-        level,
-        rows,
-        cols,
-        pairs,
-        reward,
-        puzzle,
-        puzzle_hash,
-        completion_token,
-        started_at,
-        expires_at
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        $5,
-        $6,
-        $7,
-        $8,
-        $9,
-        $10,
-        $11,
-        NOW(),
-        $12
-      )
-      `,
-      [
-        gameId,
-        userId,
-        difficulty,
-        currentLevel,
-        puzzle.rows,
-        puzzle.cols,
-        puzzle.pairs,
-        config.reward,
-        JSON.stringify(puzzle.cards),
-        puzzle.puzzleHash,
-        completionToken,
-        expiresAt,
-      ]
-    );
-
-    await client.query("COMMIT");
-
-    /* -------------------------------------------------------
-       Return puzzle to frontend
-       
-       The completion token is required to complete this
-       exact server-created game.
-    ------------------------------------------------------- */
-
-    return {
-      gameId,
-      difficulty,
-      level: currentLevel,
-
-      rows: puzzle.rows,
-      cols: puzzle.cols,
-      pairs: puzzle.pairs,
-
-      cards: puzzle.cards,
-
-      reward: config.reward,
-
-      lives: newLives,
-
-      nextLifeAt:
-        lastLifeAt && newLives < MAX_LIVES
-          ? new Date(
-              new Date(lastLifeAt).getTime() +
-                LIFE_COOLDOWN_SECONDS * 1000
-            ).toISOString()
-          : null,
-
-      completionToken,
-
-      expiresAt:
-        expiresAt.toISOString(),
-    };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
+export {
+  GAME_CONFIG,
+  MAX_LIVES,
+  LIFE_COOLDOWN_SECONDS,
+  generatePuzzle,
+  verifyPuzzleSolution,
+};
