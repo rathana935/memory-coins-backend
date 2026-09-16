@@ -40,13 +40,13 @@ CHECK (
 -- 4. PROVIDER-SPECIFIC VALIDATION
 --
 -- FaucetPay:
---   email required
---   ABA fields must be empty
+-- email required
+-- ABA fields must be empty
 --
 -- ABA:
---   account name required
---   account number required
---   FaucetPay email must be empty
+-- account name required
+-- account number required
+-- FaucetPay email must be empty
 -- =========================================================
 
 ALTER TABLE withdrawals
