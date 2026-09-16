@@ -22,8 +22,7 @@ const VALID_DIFFICULTIES = [
 
 const MAX_MOVES = 1000;
 
-const MAX_DURATION_SECONDS =
-    60 * 60;
+const MAX_DURATION_SECONDS = 60 * 60;
 
 const MAX_MATCHED_PAIRS = 18;
 
@@ -36,9 +35,7 @@ const MAX_MATCHED_INDEXES = 36;
 /*
  * Get authenticated user ID.
  *
- * IMPORTANT:
- * We only read this from server-side authentication data.
- * We do NOT trust req.body.userId.
+ * Never trust req.body.userId.
  */
 function getUserId(req) {
     return (
@@ -58,115 +55,63 @@ function getUserId(req) {
 }
 
 /*
- * Normalize difficulty.
- *
- * This allows the frontend to send:
- *
- * easy
- * easy_mode
- * easy mode
- * hard
- * medium
- * hard_mode
- * medium_mode
- * difficult
- * difficult_mode
- * expert
- *
- * Internally we always use:
+ * ONLY allow:
  *
  * easy
  * hard
  * difficult
+ *
+ * No medium.
+ * No aliases.
  */
 function normalizeDifficulty(value) {
     if (
-        value === undefined ||
-        value === null
+        typeof value !== "string"
     ) {
         return "";
     }
 
-    const normalized =
-        String(value)
-            .trim()
-            .toLowerCase();
-
-    const aliases = {
-        easy: "easy",
-        "easy mode": "easy",
-        easy_mode: "easy",
-        beginner: "easy",
-
-        hard: "hard",
-        medium: "hard",
-        normal: "hard",
-        "hard mode": "hard",
-        "medium mode": "hard",
-        hard_mode: "hard",
-        medium_mode: "hard",
-
-        difficult: "difficult",
-        "difficult mode": "difficult",
-        difficult_mode: "difficult",
-        expert: "difficult",
-        extreme: "difficult",
-    };
-
-    return (
-        aliases[normalized] ||
-        normalized
-    );
+    return value
+        .trim()
+        .toLowerCase();
 }
 
 /*
- * Extract difficulty from several possible
- * frontend request formats.
+ * Get difficulty from request body.
  *
- * Supported examples:
- *
- * {
- *   "difficulty": "easy"
- * }
+ * Primary field:
  *
  * {
- *   "mode": "easy"
+ *   difficulty: "easy"
  * }
  *
- * {
- *   "gameDifficulty": "easy"
- * }
- *
- * {
- *   "game": {
- *      "difficulty": "easy"
- *   }
- * }
+ * We also support game.difficulty in case
+ * the frontend wraps the game data.
  */
 function getDifficulty(req) {
-    const body =
-        req.body || {};
+    const body = req.body || {};
 
-    return (
-        body.difficulty ??
-        body.gameDifficulty ??
-        body.mode ??
-        body.gameMode ??
-        body.game?.difficulty ??
-        body.game?.mode ??
-        ""
-    );
+    if (
+        typeof body.difficulty === "string"
+    ) {
+        return body.difficulty;
+    }
+
+    if (
+        body.game &&
+        typeof body.game.difficulty === "string"
+    ) {
+        return body.game.difficulty;
+    }
+
+    return "";
 }
 
 /*
- * Extract level if frontend sends one.
- *
- * The game service should still verify the
- * user's actual unlocked level server-side.
+ * Get requested level.
  */
 function getLevel(req) {
-    const body =
-        req.body || {};
+    const body = req.body || {};
 
     const value =
         body.level ??
@@ -181,16 +126,15 @@ function getLevel(req) {
         return undefined;
     }
 
-    const number =
-        Number(value);
+    const level = Number(value);
 
     if (
-        !Number.isInteger(number)
+        !Number.isInteger(level)
     ) {
         return undefined;
     }
 
-    return number;
+    return level;
 }
 
 function isValidUUID(value) {
@@ -223,8 +167,7 @@ router.get(
     "/status",
     async (req, res) => {
         try {
-            const userId =
-                getUserId(req);
+            const userId = getUserId(req);
 
             console.log(
                 "GAME STATUS:",
@@ -251,6 +194,7 @@ router.get(
                 success: true,
                 ...result,
             });
+
         } catch (error) {
             console.error(
                 "GET /api/game/status error:",
@@ -258,7 +202,9 @@ router.get(
             );
 
             switch (error?.code) {
+
                 case "USER_NOT_FOUND":
+
                     return sendError(
                         res,
                         404,
@@ -267,6 +213,7 @@ router.get(
                     );
 
                 default:
+
                     return sendError(
                         res,
                         500,
@@ -286,6 +233,7 @@ router.post(
     "/start",
     async (req, res) => {
         try {
+
             const userId =
                 getUserId(req);
 
@@ -301,8 +249,9 @@ router.post(
                 getLevel(req);
 
             console.log(
-                "START GAME:",
+                "START GAME REQUEST:",
                 {
+                    body: req.body,
                     receivedDifficulty,
                     normalizedDifficulty:
                         difficulty,
@@ -316,6 +265,7 @@ router.post(
             ------------------------------------------------- */
 
             if (!userId) {
+
                 return sendError(
                     res,
                     401,
@@ -326,6 +276,12 @@ router.post(
 
             /* -------------------------------------------------
                DIFFICULTY
+               
+               ONLY:
+               
+               easy
+               hard
+               difficult
             ------------------------------------------------- */
 
             if (
@@ -333,6 +289,7 @@ router.post(
                     difficulty
                 )
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -342,7 +299,7 @@ router.post(
             }
 
             /* -------------------------------------------------
-               OPTIONAL LEVEL VALIDATION
+               LEVEL
             ------------------------------------------------- */
 
             if (
@@ -352,6 +309,7 @@ router.post(
                     level > 100
                 )
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -363,9 +321,8 @@ router.post(
             /* -------------------------------------------------
                START GAME
                
-               Pass level as a third argument.
-               If the service only accepts two arguments,
-               JavaScript simply ignores the extra argument.
+               The game service should verify the user's
+               actual unlocked level server-side.
             ------------------------------------------------- */
 
             const result =
@@ -379,7 +336,9 @@ router.post(
                 success: true,
                 ...result,
             });
+
         } catch (error) {
+
             console.error(
                 "POST /api/game/start error:",
                 error
@@ -389,7 +348,9 @@ router.post(
                 error?.code;
 
             switch (code) {
+
                 case "USER_NOT_FOUND":
+
                     return sendError(
                         res,
                         404,
@@ -397,8 +358,9 @@ router.post(
                         "User not found."
                     );
 
-                case "INVALID_GAME_DIFFICULTY":
                 case "INVALID_DIFFICULTY":
+                case "INVALID_GAME_DIFFICULTY":
+
                     return sendError(
                         res,
                         400,
@@ -407,6 +369,7 @@ router.post(
                     );
 
                 case "NO_LIVES":
+
                     return sendError(
                         res,
                         400,
@@ -415,6 +378,7 @@ router.post(
                     );
 
                 case "GAME_ALREADY_ACTIVE":
+
                     return sendError(
                         res,
                         409,
@@ -423,6 +387,7 @@ router.post(
                     );
 
                 case "MAX_LEVEL_REACHED":
+
                     return sendError(
                         res,
                         400,
@@ -431,6 +396,7 @@ router.post(
                     );
 
                 case "INVALID_CURRENT_LEVEL":
+
                     return sendError(
                         res,
                         400,
@@ -439,6 +405,7 @@ router.post(
                     );
 
                 case "INVALID_GAME_LEVEL":
+
                     return sendError(
                         res,
                         400,
@@ -447,6 +414,7 @@ router.post(
                     );
 
                 case "INVALID_PAIR_COUNT":
+
                     return sendError(
                         res,
                         500,
@@ -455,6 +423,7 @@ router.post(
                     );
 
                 default:
+
                     return sendError(
                         res,
                         500,
@@ -473,11 +442,14 @@ router.post(
 router.post(
     "/complete",
     async (req, res) => {
+
         try {
+
             const userId =
                 getUserId(req);
 
             if (!userId) {
+
                 return sendError(
                     res,
                     401,
@@ -502,11 +474,7 @@ router.post(
             const difficulty =
                 normalizeDifficulty(
                     body.difficulty ??
-                    body.gameDifficulty ??
-                    body.mode ??
-                    body.gameMode ??
-                    body.game?.difficulty ??
-                    body.game?.mode
+                    body.game?.difficulty
                 );
 
             /* -------------------------------------------------
@@ -518,6 +486,7 @@ router.post(
                     gameId
                 )
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -533,11 +502,10 @@ router.post(
             if (
                 typeof completionToken !==
                     "string" ||
-                completionToken.length <
-                    10 ||
-                completionToken.length >
-                    500
+                completionToken.length < 10 ||
+                completionToken.length > 500
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -555,6 +523,7 @@ router.post(
                     difficulty
                 )
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -568,13 +537,11 @@ router.post(
             ------------------------------------------------- */
 
             if (
-                !Number.isInteger(
-                    moves
-                ) ||
+                !Number.isInteger(moves) ||
                 moves < 1 ||
-                moves >
-                    MAX_MOVES
+                moves > MAX_MOVES
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -588,9 +555,7 @@ router.post(
             ------------------------------------------------- */
 
             const finalDuration =
-                Number.isInteger(
-                    duration
-                )
+                Number.isInteger(duration)
                     ? duration
                     : durationSeconds;
 
@@ -602,6 +567,7 @@ router.post(
                 finalDuration >
                     MAX_DURATION_SECONDS
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -622,6 +588,7 @@ router.post(
                 matchedPairs >
                     MAX_MATCHED_PAIRS
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -641,6 +608,7 @@ router.post(
                 matchedIndexes.length >
                     MAX_MATCHED_INDEXES
             ) {
+
                 return sendError(
                     res,
                     400,
@@ -650,17 +618,15 @@ router.post(
             }
 
             for (
-                const index of
-                    matchedIndexes
+                const index of matchedIndexes
             ) {
+
                 if (
-                    !Number.isInteger(
-                        index
-                    ) ||
+                    !Number.isInteger(index) ||
                     index < 0 ||
-                    index >=
-                        MAX_MATCHED_INDEXES
+                    index >= MAX_MATCHED_INDEXES
                 ) {
+
                     return sendError(
                         res,
                         400,
@@ -673,7 +639,7 @@ router.post(
             /* -------------------------------------------------
                COMPLETE GAME
                
-               Reward/coins are NEVER accepted
+               Reward and coins are NOT accepted
                from the frontend.
             ------------------------------------------------- */
 
@@ -696,7 +662,9 @@ router.post(
                 success: true,
                 ...result,
             });
+
         } catch (error) {
+
             console.error(
                 "POST /api/game/complete error:",
                 error
@@ -706,7 +674,9 @@ router.post(
                 error?.code;
 
             switch (code) {
+
                 case "USER_NOT_FOUND":
+
                     return sendError(
                         res,
                         404,
@@ -715,6 +685,7 @@ router.post(
                     );
 
                 case "GAME_NOT_FOUND":
+
                     return sendError(
                         res,
                         404,
@@ -723,6 +694,7 @@ router.post(
                     );
 
                 case "INVALID_GAME_SESSION":
+
                     return sendError(
                         res,
                         403,
@@ -730,8 +702,9 @@ router.post(
                         "Invalid game session."
                     );
 
-                case "INVALID_GAME_DIFFICULTY":
                 case "INVALID_DIFFICULTY":
+                case "INVALID_GAME_DIFFICULTY":
+
                     return sendError(
                         res,
                         400,
@@ -740,6 +713,7 @@ router.post(
                     );
 
                 case "INVALID_COMPLETION_TOKEN":
+
                     return sendError(
                         res,
                         403,
@@ -748,6 +722,7 @@ router.post(
                     );
 
                 case "GAME_ALREADY_COMPLETED":
+
                     return sendError(
                         res,
                         409,
@@ -756,6 +731,7 @@ router.post(
                     );
 
                 case "GAME_EXPIRED":
+
                     return sendError(
                         res,
                         400,
@@ -764,6 +740,7 @@ router.post(
                     );
 
                 case "INVALID_MOVES":
+
                     return sendError(
                         res,
                         400,
@@ -772,6 +749,7 @@ router.post(
                     );
 
                 case "INVALID_GAME_DURATION":
+
                     return sendError(
                         res,
                         400,
@@ -780,6 +758,7 @@ router.post(
                     );
 
                 case "INVALID_PUZZLE":
+
                     return sendError(
                         res,
                         400,
@@ -788,6 +767,7 @@ router.post(
                     );
 
                 case "INVALID_MATCHED_PAIRS":
+
                     return sendError(
                         res,
                         400,
@@ -796,6 +776,7 @@ router.post(
                     );
 
                 case "INVALID_MATCHED_INDEXES":
+
                     return sendError(
                         res,
                         400,
@@ -804,6 +785,7 @@ router.post(
                     );
 
                 case "INVALID_MATCHED_INDEX":
+
                     return sendError(
                         res,
                         400,
@@ -812,6 +794,7 @@ router.post(
                     );
 
                 case "PUZZLE_NOT_COMPLETED":
+
                     return sendError(
                         res,
                         400,
@@ -820,6 +803,7 @@ router.post(
                     );
 
                 case "INVALID_GAME_START_TIME":
+
                     return sendError(
                         res,
                         400,
@@ -828,6 +812,7 @@ router.post(
                     );
 
                 case "INVALID_GAME_LEVEL":
+
                     return sendError(
                         res,
                         400,
@@ -836,6 +821,7 @@ router.post(
                     );
 
                 case "LEVEL_NOT_UNLOCKED":
+
                     return sendError(
                         res,
                         409,
@@ -844,6 +830,7 @@ router.post(
                     );
 
                 case "INVALID_COIN_BALANCE":
+
                     return sendError(
                         res,
                         500,
@@ -852,6 +839,7 @@ router.post(
                     );
 
                 case "COIN_BALANCE_OVERFLOW":
+
                     return sendError(
                         res,
                         500,
@@ -860,6 +848,7 @@ router.post(
                     );
 
                 case "USER_UPDATE_FAILED":
+
                     return sendError(
                         res,
                         500,
@@ -868,6 +857,7 @@ router.post(
                     );
 
                 case "INVALID_GAME_CONFIGURATION":
+
                     return sendError(
                         res,
                         500,
@@ -876,6 +866,7 @@ router.post(
                     );
 
                 default:
+
                     return sendError(
                         res,
                         500,
