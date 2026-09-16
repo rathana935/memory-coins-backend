@@ -494,7 +494,7 @@ export async function startGame({
         );
 
       error.code =
-        "INVALID_LEVEL";
+        "INVALID_GAME_LEVEL";
 
       throw error;
     }
@@ -643,7 +643,7 @@ export async function startGame({
         );
 
       error.code =
-        "LEVEL_LOCKED";
+        "LEVEL_NOT_UNLOCKED";
 
       error.currentLevel =
         currentLevel;
@@ -683,7 +683,7 @@ export async function startGame({
         );
 
       error.code =
-        "ACTIVE_GAME_EXISTS";
+        "GAME_ALREADY_ACTIVE";
 
       throw error;
     }
@@ -1571,9 +1571,40 @@ export async function completeGame({
    GET GAME STATUS
 ========================================================= */
 
-export async function getGameStatus({
-  userId
-}) {
+export async function getGameStatus(
+  userOrOptions
+) {
+  /*
+     Supports BOTH:
+
+       getGameStatus(userId)
+
+     and:
+
+       getGameStatus({ userId })
+
+     This keeps the service compatible with
+     both the corrected route and older callers.
+  */
+
+  const userId =
+    typeof userOrOptions === "object" &&
+    userOrOptions !== null
+      ? userOrOptions.userId
+      : userOrOptions;
+
+  if (!userId) {
+    const error =
+      new Error(
+        "User ID is required."
+      );
+
+    error.code =
+      "USER_NOT_FOUND";
+
+    throw error;
+  }
+
   const result =
     await pool.query(
       `
