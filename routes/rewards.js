@@ -4,7 +4,6 @@ import {
     createAdRewardIntent,
     claimAdLife,
     claimDailyBonus,
-    luckyRoll,
     claimDoubleGameReward,
     getRewardStatus
 } from "../services/rewards.js";
@@ -69,9 +68,7 @@ function handleError(
 
         NO_VERIFIED_AD: 409,
 
-        AD_ALREADY_CONSUMED: 409,
-
-        LUCKY_ROLL_COOLDOWN: 429
+        AD_ALREADY_CONSUMED: 409
 
     };
 
@@ -82,37 +79,21 @@ function handleError(
         ] || 500;
 
 
-    const response = {
-
-        success: false,
-
-        code:
-            error.code ||
-            "INTERNAL_ERROR",
-
-        message:
-            error.message ||
-            "Something went wrong."
-
-    };
-
-
-    if (
-        error.code ===
-        "LUCKY_ROLL_COOLDOWN"
-    ) {
-
-        response.remainingSeconds =
-            Number(
-                error.remainingSeconds || 0
-            );
-
-    }
-
-
     return res
         .status(status)
-        .json(response);
+        .json({
+
+            success: false,
+
+            code:
+                error.code ||
+                "INTERNAL_ERROR",
+
+            message:
+                error.message ||
+                "Something went wrong."
+
+        });
 
 }
 
@@ -123,23 +104,17 @@ function handleError(
 
 POST /api/rewards/ad-intent
 
-Body:
+Life:
 
 {
     "adType": "life"
 }
 
-OR:
+Double reward:
 
 {
     "adType": "double_reward",
     "gameSessionId": "UUID"
-}
-
-OR:
-
-{
-    "adType": "lucky_roll"
 }
 
 ========================================================= */
@@ -210,6 +185,13 @@ router.post(
 
 /* =========================================================
    CLAIM +1 LIFE
+=========================================================
+
+POST /api/rewards/life
+
+This endpoint consumes a confirmed AdsGram life
+reward and gives exactly +1 life.
+
 ========================================================= */
 
 router.post(
@@ -275,40 +257,17 @@ router.post(
 
 
 /* =========================================================
-   LUCKY ROLL
-========================================================= */
-
-router.post(
-    "/lucky-roll",
-    async (req, res) => {
-
-        try {
-
-            const result =
-                await luckyRoll(
-                    req.user.user_id
-                );
-
-
-            return res.json(
-                result
-            );
-
-        } catch (error) {
-
-            return handleError(
-                res,
-                error
-            );
-
-        }
-
-    }
-);
-
-
-/* =========================================================
    DOUBLE GAME REWARD
+=========================================================
+
+POST /api/rewards/double-game-reward
+
+Body:
+
+{
+    "gameSessionId": "UUID"
+}
+
 ========================================================= */
 
 router.post(
@@ -324,17 +283,19 @@ router.post(
 
             if (!gameSessionId) {
 
-                return res.status(400).json({
+                return res
+                    .status(400)
+                    .json({
 
-                    success: false,
+                        success: false,
 
-                    code:
-                        "GAME_SESSION_REQUIRED",
+                        code:
+                            "GAME_SESSION_REQUIRED",
 
-                    message:
-                        "Game session ID is required."
+                        message:
+                            "Game session ID is required."
 
-                });
+                    });
 
             }
 
@@ -402,5 +363,9 @@ router.get(
     }
 );
 
+
+/* =========================================================
+   EXPORT
+========================================================= */
 
 export default router;
