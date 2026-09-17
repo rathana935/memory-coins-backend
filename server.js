@@ -41,7 +41,7 @@ const NODE_ENV =
 const ADSGRAM_BLOCK_ID =
     String(
         process.env.ADSGRAM_BLOCK_ID || "48148"
-    );
+    ).trim();
 
 
 /* =========================================================
@@ -81,31 +81,34 @@ app.use(
 
 app.use(
     cors({
+
         origin: (
             origin,
             callback
         ) => {
 
             /*
-             * Allow requests without an Origin header.
+             * Allow requests without Origin.
              *
-             * This is useful for:
+             * Useful for:
              * - Telegram WebView
              * - server-to-server requests
              * - health checks
              */
 
             if (!origin) {
+
                 return callback(
                     null,
                     true
                 );
+
             }
 
 
             /*
              * If FRONTEND_URL is configured,
-             * only allow that frontend.
+             * only allow that exact origin.
              */
 
             if (
@@ -122,10 +125,8 @@ app.use(
 
 
             /*
-             * Development / fallback mode.
-             *
-             * If FRONTEND_URL is not configured,
-             * allow the request.
+             * If no FRONTEND_URL is configured,
+             * allow all origins.
              */
 
             if (!FRONTEND_URL) {
@@ -147,6 +148,7 @@ app.use(
         },
 
         credentials: false
+
     })
 );
 
@@ -189,11 +191,15 @@ const generalLimiter =
             false,
 
         message: {
+
             success: false,
+
             code:
                 "RATE_LIMITED",
+
             message:
                 "Too many requests. Please try again later."
+
         }
 
     });
@@ -215,11 +221,15 @@ const authLimiter =
             false,
 
         message: {
+
             success: false,
+
             code:
                 "AUTH_RATE_LIMITED",
+
             message:
                 "Too many authentication requests."
+
         }
 
     });
@@ -241,11 +251,15 @@ const adsgramLimiter =
             false,
 
         message: {
+
             success: false,
+
             code:
                 "AD_RATE_LIMITED",
+
             message:
                 "Too many ad reward requests."
+
         }
 
     });
@@ -261,7 +275,7 @@ app.use(
 
 
 /* =========================================================
-   ROOT ROUTE
+   ROOT
 ========================================================= */
 
 app.get(
@@ -327,6 +341,7 @@ app.get(
 
 app.get(
     "/health",
+
     async (req, res) => {
 
         try {
@@ -394,35 +409,27 @@ app.get(
 
 
 /* =========================================================
-   ADSGRAM REWARD URL CALLBACK
+   ADSGRAM REWARD CALLBACK
 =========================================================
 
-AdsGram:
+PUBLIC ENDPOINT
 
-GET /api/adsgram/reward?userid=[userId]
+AdsGram does not send the user's Bearer token.
 
-IMPORTANT:
+The callback only identifies the Telegram user.
 
-This endpoint is intentionally PUBLIC.
+The rewards service must verify that the user has
+a valid pending ad reward before giving anything.
 
-AdsGram does not have the user's Bearer
-session token.
+Example:
 
-The backend does NOT trust:
-
-- reward amount
-- coins
-- balance
-- ad type from the URL
-- game session from the client
-
-The callback only confirms an existing
-server-created pending reward intent.
+GET /api/adsgram/reward?userid=123456789
 
 ========================================================= */
 
 app.get(
     "/api/adsgram/reward",
+
     adsgramLimiter,
 
     async (req, res) => {
@@ -436,6 +443,10 @@ app.get(
                     ""
                 ).trim();
 
+
+            /* -----------------------------------------
+               USER ID REQUIRED
+            ----------------------------------------- */
 
             if (!telegramId) {
 
@@ -454,9 +465,9 @@ app.get(
             }
 
 
-            /*
-             * Basic Telegram ID validation.
-             */
+            /* -----------------------------------------
+               BASIC TELEGRAM ID VALIDATION
+            ----------------------------------------- */
 
             if (
                 !/^\d{1,20}$/.test(
@@ -491,16 +502,10 @@ app.get(
                 });
 
 
-            /*
-             * IMPORTANT:
-             *
-             * confirmAdsgramReward() already returns
-             * the correct public response object.
-             */
-
             return res.json(
                 result
             );
+
 
         } catch (error) {
 
@@ -510,8 +515,12 @@ app.get(
             );
 
 
+            /* -----------------------------------------
+               KNOWN REWARD ERRORS
+            ----------------------------------------- */
+
             if (
-                error.code ===
+                error?.code ===
                 "USER_NOT_FOUND"
             ) {
 
@@ -531,7 +540,7 @@ app.get(
 
 
             if (
-                error.code ===
+                error?.code ===
                 "NO_PENDING_AD"
             ) {
 
@@ -551,7 +560,7 @@ app.get(
 
 
             if (
-                error.code ===
+                error?.code ===
                 "AD_ALREADY_PROCESSED"
             ) {
 
@@ -571,7 +580,7 @@ app.get(
 
 
             if (
-                error.code ===
+                error?.code ===
                 "INVALID_AD_TYPE"
             ) {
 
@@ -591,7 +600,7 @@ app.get(
 
 
             if (
-                error.code ===
+                error?.code ===
                 "INVALID_GAME_SESSION"
             ) {
 
@@ -611,7 +620,7 @@ app.get(
 
 
             if (
-                error.code ===
+                error?.code ===
                 "GAME_SESSION_NOT_FOUND"
             ) {
 
@@ -631,7 +640,7 @@ app.get(
 
 
             if (
-                error.code ===
+                error?.code ===
                 "GAME_NOT_COMPLETED"
             ) {
 
@@ -669,18 +678,20 @@ app.get(
 
 
 /* =========================================================
-   AUTHENTICATION ROUTES
+   AUTHENTICATION
 ========================================================= */
 
 app.use(
     "/api/auth",
+
     authLimiter,
+
     authRouter
 );
 
 
 /* =========================================================
-   GAME ROUTES
+   GAME
 ========================================================= */
 
 app.use(
@@ -693,25 +704,28 @@ app.use(
 
 
 /* =========================================================
-   REWARD ROUTES
+   REWARDS
 =========================================================
 
-rewardsRouter already contains:
+IMPORTANT:
 
-router.use(requireAuth)
+If rewards.js already contains:
 
-Therefore do NOT add requireAuth here again.
+    router.use(requireAuth)
+
+do not add requireAuth here.
 
 ========================================================= */
 
 app.use(
     "/api/rewards",
+
     rewardsRouter
 );
 
 
 /* =========================================================
-   LEADERBOARD ROUTES
+   LEADERBOARD
 ========================================================= */
 
 app.use(
@@ -724,7 +738,7 @@ app.use(
 
 
 /* =========================================================
-   REFERRAL ROUTES
+   REFERRALS
 ========================================================= */
 
 app.use(
@@ -737,7 +751,7 @@ app.use(
 
 
 /* =========================================================
-   WITHDRAWAL ROUTES
+   WITHDRAWALS
 ========================================================= */
 
 app.use(
@@ -750,7 +764,7 @@ app.use(
 
 
 /* =========================================================
-   404 HANDLER
+   404
 ========================================================= */
 
 app.use(
@@ -800,7 +814,7 @@ app.use(
 
 
         const status =
-            Number(error.status) || 500;
+            Number(error?.status) || 500;
 
 
         return res.status(
@@ -810,18 +824,18 @@ app.use(
             success: false,
 
             code:
-                error.code ||
+                error?.code ||
                 "INTERNAL_SERVER_ERROR",
 
             message:
                 NODE_ENV === "production"
                     ? (
-                        error.expose
+                        error?.expose
                             ? error.message
                             : "Internal server error."
                     )
                     : (
-                        error.message ||
+                        error?.message ||
                         "Internal server error."
                     )
 
@@ -838,6 +852,7 @@ app.use(
 const server =
     app.listen(
         PORT,
+
         () => {
 
             console.log(
@@ -908,7 +923,7 @@ const server =
             );
 
             console.log(
-                "/api/adsgram/reward"
+                "/api/adsgram/reward?userid=[userId]"
             );
 
             console.log(
